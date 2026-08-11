@@ -18,6 +18,7 @@ Projeto da disciplina **Desenvolvimento de Aplicações Computacionais** — Uno
   - [3. Atuação e Parametrização do Sistema](#3-atuação-e-parametrização-do-sistema-desktop--hardware)
   - [4. Gestão de Histórico e Auditoria](#4-gestão-de-histórico-e-auditoria-logs-em-tabela)
 - [Arquitetura e Organização do Código](#arquitetura-e-organização-do-código)
+- [Organização do Trabalho em Equipe](#organização-do-trabalho-em-equipe)
 - [Tecnologias](#tecnologias)
 - [Como Executar](#como-executar)
 - [Forma de Entrega e Apresentação](#forma-de-entrega-e-apresentação-a11)
@@ -31,9 +32,10 @@ Projeto da disciplina **Desenvolvimento de Aplicações Computacionais** — Uno
 
 | Integrante | Usuário GitHub | Função |
 |---|---|---|
-| Samuel De Marco | [@SamuelDeMarco-Dev](https://github.com/SamuelDeMarco-Dev) | *(a definir)* |
-| Davy Josias Scheuermann | [@Davyjosias01](https://github.com/Davyjosias01) | *(a definir)* |
-| *(preencher)* | *(preencher)* | *(a definir)* |
+| Samuel De Marco | [@SamuelDeMarco-Dev](https://github.com/SamuelDeMarco-Dev) | Arquitetura MVC, janela principal e Dashboard de Monitoramento |
+| Davy Josias Scheuermann | [@Davyjosias01](https://github.com/Davyjosias01) | Painel de Configuração da Comunicação Serial |
+| Lucas Zamoner | [@lucaszlocatelli](https://github.com/lucaszlocatelli) | Janela modal de Limites e Parâmetros |
+| *(preencher)* | *(preencher)* | Histórico de Eventos e Registros |
 
 > ⚠️ Todos os integrantes devem possuir commits registrados em seu próprio usuário do GitHub. Ver [Regras Obrigatórias do Git](#regras-obrigatórias-do-git).
 
@@ -183,12 +185,20 @@ Toda a atividade do sistema é centralizada na `QTableWidget` de registros:
 
 ```
 SmartGrid/
-├── main.py              # Ponto de entrada enxuto: apenas inicializa a aplicação
-├── ui/                  # Arquivos .ui do Qt Designer e telas compiladas .py
-│   ├── *.ui             #   → gerados pelo Qt Designer
-│   └── *.py             #   → compilados via pyuic6 (NÃO editar manualmente)
-├── controllers/         # Classes de controle: lógica das janelas e eventos (Signals & Slots)
-├── models/              # Regras de negócio, entidades e dados
+├── main.py                        # Ponto de entrada enxuto: apenas inicializa a aplicação
+├── requirements.txt
+├── ui/                            # Arquivos .ui do Qt Designer e telas compiladas .py
+│   ├── main_window.ui             #   → gerado pelo Qt Designer
+│   └── main_window_ui.py          #   → compilado via pyuic6 (NÃO editar manualmente)
+├── controllers/                   # Lógica das janelas e eventos (Signals & Slots)
+│   └── main_window_controller.py  #   → shell que hospeda as telas
+├── models/                        # Regras de negócio, entidades e dados
+│   ├── leitura.py                 #   → amostra de telemetria; potência derivada de P = V × I
+│   ├── evento.py                  #   → Evento e TipoEvento (Comando / Alerta / Status)
+│   ├── regra_alerta.py            #   → RegraAlerta e Grandeza (setpoints)
+│   ├── estado_disjuntor.py        #   → estado binário do disjuntor, com rótulo e cor
+│   ├── barramento.py              #   → canal de sinais entre as telas
+│   └── simulador_telemetria.py    #   → dados amostrais (sem hardware nesta entrega)
 └── README.md
 ```
 
@@ -199,6 +209,63 @@ SmartGrid/
 - Toda lógica de eventos (**Signals & Slots**) vive em `/controllers`;
 - `main.py` funciona **apenas como ponto de partida** da aplicação;
 - Organização de classes seguindo boas práticas de **POO** e legibilidade em Python.
+
+### Comunicação entre as Telas — Barramento de Eventos
+
+Nenhum controller importa outro controller. As telas conversam por sinais publicados em `models/barramento.py`, o que as mantém independentes e permite o desenvolvimento em paralelo:
+
+| Sinal | Emitido por | Consumido por |
+|---|---|---|
+| `leitura_recebida(Leitura)` | Dashboard | Dashboard (gráfico) |
+| `evento_registrado(Evento)` | Qualquer tela | Histórico de Eventos |
+| `estado_disjuntor_alterado(EstadoDisjuntor)` | Dashboard | Dashboard (badge), Histórico |
+| `regras_alteradas(list[RegraAlerta])` | Diálogo de Limites | Dashboard (proteção por setpoint) |
+| `status_conexao_alterado(bool, str)` | Painel Serial | Janela principal (barra de status) |
+
+```python
+from models.barramento import barramento
+from models.evento import TipoEvento
+
+barramento.evento_registrado.connect(self._adicionar_linha)
+barramento.registrar_evento(TipoEvento.COMANDO, "Corte de emergência acionado", "12.50 A / 2750 W")
+```
+
+A janela principal expõe `registrar_pagina(nome, widget)` e `ir_para(nome)` — é assim que cada tela é encaixada no `QStackedWidget` do shell.
+
+### Compilação das Telas do Qt Designer
+
+Após editar um `.ui`, recompile e **versione os dois arquivos** (`.ui` e `_ui.py`):
+
+```bash
+pyuic6 -o ui/nome_da_tela_ui.py ui/nome_da_tela.ui
+```
+
+---
+
+## Organização do Trabalho em Equipe
+
+O trabalho está dividido em **milestones e issues no GitHub**, com propriedade exclusiva de arquivos: cada tela é dona do seu `.ui`, do seu controller e dos seus models específicos. Assim ninguém edita o arquivo de ninguém e não há conflito de merge.
+
+| Milestone | Conteúdo |
+|---|---|
+| **M0 — Fundação MVC & Contratos** ✅ | Estrutura de pastas, `main.py`, shell da janela principal e entidades compartilhadas em `/models` |
+| **M1 — Entrega A1/1: Telas** | As 4 telas obrigatórias, desenvolvidas em paralelo — uma por integrante |
+| **M2 — Integração & Entrega** | Fiação das telas no shell, padronização visual, checklist de entrega |
+
+Os contratos de `/models` entregues no M0 estão **congelados**: qualquer campo novo passa por comentário na issue correspondente e PR específico.
+
+### Fluxo de trabalho
+
+```bash
+git switch main && git pull            # sempre partir do main atualizado
+git switch -c feat/minha-tela          # branch própria
+# ... commits pequenos e frequentes ...
+git pull --rebase origin main          # antes de abrir o PR
+```
+
+- Ninguém commita direto em `main` — toda entrega passa por **Pull Request**.
+- Mensagens no padrão `tipo(escopo): descrição`, ex.: `feat(dashboard): pré-carrega gráfico com histórico de 24h`.
+- Commits distribuídos ao longo do período. Ver [Regras Obrigatórias do Git](#regras-obrigatórias-do-git).
 
 ---
 
@@ -245,6 +312,10 @@ python main.py
 ```
 
 > Em Linux/macOS, ative o ambiente virtual com `source .venv/bin/activate`.
+>
+> Execute sempre a partir da raiz do projeto (`SmartGrid/`) — é de lá que os pacotes `ui`, `controllers` e `models` são importados.
+
+**Requisitos:** Python 3.10 ou superior. As dependências estão em `requirements.txt` (PyQt6, pyqtgraph, numpy e pyserial).
 
 ---
 
