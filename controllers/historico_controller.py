@@ -1,9 +1,11 @@
 """Controller da tela de historico de eventos."""
 
 from PyQt6.QtCore import QDate
+from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
+    QMessageBox,
     QTableWidgetItem,
     QWidget,
 )
@@ -31,6 +33,7 @@ class HistoricoController(QWidget, Ui_Historico):
         self._configurar_filtros()
         self._configurar_tabela()
         self._conectar_filtros()
+        self._conectar_acoes()
         self._conectar_barramento()
         self.aplicar_filtros()
 
@@ -42,8 +45,11 @@ class HistoricoController(QWidget, Ui_Historico):
         self.tabelaEventos.setRowCount(len(eventos))
 
         for linha, evento in enumerate(eventos):
-            for coluna, valor in enumerate(evento.como_linha()):
-                self.tabelaEventos.setItem(linha, coluna, QTableWidgetItem(valor))
+            itens = [QTableWidgetItem(valor) for valor in evento.como_linha()]
+            self._aplicar_estilo_evento(evento, itens)
+
+            for coluna, item in enumerate(itens):
+                self.tabelaEventos.setItem(linha, coluna, item)
 
         self.tabelaEventos.resizeRowsToContents()
 
@@ -58,6 +64,25 @@ class HistoricoController(QWidget, Ui_Historico):
     def registrar_evento(self, evento: Evento) -> None:
         """Armazena um evento recebido e reaplica os filtros atuais."""
         self.repositorio.adicionar(evento)
+        self.aplicar_filtros()
+
+    def limpar_historico(self) -> None:
+        """Confirma e remove todos os eventos armazenados."""
+        resposta = QMessageBox.question(
+            self,
+            "Limpar histórico",
+            (
+                "Deseja realmente remover todos os eventos do histórico?\n\n"
+                "Esta ação não poderá ser desfeita durante esta execução."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if resposta != QMessageBox.StandardButton.Yes:
+            return
+
+        self.repositorio.limpar()
         self.aplicar_filtros()
 
     def _configurar_filtros(self) -> None:
@@ -82,9 +107,28 @@ class HistoricoController(QWidget, Ui_Historico):
         self.comboTipoEvento.currentTextChanged.connect(self.aplicar_filtros)
         self.dateFiltroInicio.dateChanged.connect(self.aplicar_filtros)
 
+    def _conectar_acoes(self) -> None:
+        self.botaoLimparHistorico.clicked.connect(self.limpar_historico)
+
     def _conectar_barramento(self) -> None:
         barramento.evento_registrado.connect(self.registrar_evento)
 
     def _tipo_selecionado(self) -> TipoEvento | None:
         texto = self.comboTipoEvento.currentText()
         return self._TIPOS_POR_TEXTO.get(texto)
+
+    def _aplicar_estilo_evento(
+        self, evento: Evento, itens: list[QTableWidgetItem]
+    ) -> None:
+        fundo, texto = self._cores_do_tipo(evento.tipo)
+        item_tipo = itens[1]
+        item_tipo.setBackground(QBrush(fundo))
+        item_tipo.setForeground(QBrush(texto))
+
+    def _cores_do_tipo(self, tipo: TipoEvento) -> tuple[QColor, QColor]:
+        cores = {
+            TipoEvento.ALERTA: (QColor("#FCE8E6"), QColor("#8A2D1C")),
+            TipoEvento.COMANDO: (QColor("#E8F1FD"), QColor("#1D4F80")),
+            TipoEvento.STATUS: (QColor("#ECEFF3"), QColor("#4B5563")),
+        }
+        return cores[tipo]
