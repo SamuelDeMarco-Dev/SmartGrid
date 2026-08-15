@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from models.barramento import barramento
 from models.evento import Evento, TipoEvento
 from models.repositorio_eventos import RepositorioEventos
 from ui.historico_ui import Ui_Historico
@@ -30,6 +31,7 @@ class HistoricoController(QWidget, Ui_Historico):
         self._configurar_filtros()
         self._configurar_tabela()
         self._conectar_filtros()
+        self._conectar_barramento()
         self.aplicar_filtros()
 
     def atualizar_tabela(self, eventos: list[Evento] | None = None) -> None:
@@ -53,6 +55,11 @@ class HistoricoController(QWidget, Ui_Historico):
         )
         self.atualizar_tabela(eventos)
 
+    def registrar_evento(self, evento: Evento) -> None:
+        """Armazena um evento recebido e reaplica os filtros atuais."""
+        self.repositorio.adicionar(evento)
+        self.aplicar_filtros()
+
     def _configurar_filtros(self) -> None:
         self.dateFiltroInicio.setDate(QDate.currentDate())
 
@@ -74,6 +81,9 @@ class HistoricoController(QWidget, Ui_Historico):
     def _conectar_filtros(self) -> None:
         self.comboTipoEvento.currentTextChanged.connect(self.aplicar_filtros)
         self.dateFiltroInicio.dateChanged.connect(self.aplicar_filtros)
+
+    def _conectar_barramento(self) -> None:
+        barramento.evento_registrado.connect(self.registrar_evento)
 
     def _tipo_selecionado(self) -> TipoEvento | None:
         texto = self.comboTipoEvento.currentText()
