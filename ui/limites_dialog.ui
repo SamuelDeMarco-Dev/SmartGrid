@@ -6,73 +6,96 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>881</width>
-    <height>172</height>
+    <width>640</width>
+    <height>360</height>
    </rect>
   </property>
   <property name="windowTitle">
-   <string>Dialog</string>
+   <string>Limites e Parâmetros</string>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <item>
-    <layout class="QFormLayout" name="formLayout">
-     <item row="2" column="0">
-      <widget class="QLabel" name="label">
-       <property name="text">
-        <string>Nome da Regra:</string>
+    <widget class="QLabel" name="labelTitulo">
+     <property name="text">
+      <string>Configuração de Limites e Parâmetros</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="layoutConteudo">
+     <item>
+      <widget class="QGroupBox" name="grupoRegras">
+       <property name="title">
+        <string>Regras configuradas</string>
        </property>
+       <layout class="QVBoxLayout" name="layoutGrupoRegras">
+        <item>
+         <widget class="QListWidget" name="listaRegras"/>
+        </item>
+       </layout>
       </widget>
      </item>
-     <item row="2" column="1">
-      <widget class="QLineEdit" name="input_nome"/>
-     </item>
-     <item row="3" column="0">
-      <widget class="QLabel" name="label_2">
-       <property name="text">
-        <string>Grandeza:</string>
+     <item>
+      <layout class="QFormLayout" name="formLayout">
+       <property name="fieldGrowthPolicy">
+        <enum>QFormLayout::FieldGrowthPolicy::ExpandingFieldsGrow</enum>
        </property>
-      </widget>
-     </item>
-     <item row="3" column="1">
-      <widget class="QComboBox" name="combo_grandeza">
-       <item>
-        <property name="text">
-         <string>Corrente</string>
-        </property>
+       <item row="0" column="0">
+        <widget class="QLabel" name="label">
+         <property name="text">
+          <string>Nome da regra</string>
+         </property>
+        </widget>
        </item>
-       <item>
-        <property name="text">
-         <string>Tensão</string>
-        </property>
+       <item row="0" column="1">
+        <widget class="QLineEdit" name="input_nome"/>
        </item>
-       <item>
-        <property name="text">
-         <string>Potência</string>
-        </property>
+       <item row="1" column="0">
+        <widget class="QLabel" name="label_2">
+         <property name="text">
+          <string>Grandeza</string>
+         </property>
+        </widget>
        </item>
-      </widget>
-     </item>
-     <item row="4" column="0">
-      <widget class="QLabel" name="label_3">
-       <property name="text">
-        <string>Limite Máximo:</string>
-       </property>
-      </widget>
-     </item>
-     <item row="4" column="1">
-      <widget class="QDoubleSpinBox" name="spin_limite"/>
-     </item>
-     <item row="5" column="0">
-      <widget class="QCheckBox" name="check_ativa">
-       <property name="text">
-        <string>Ativa;</string>
-       </property>
-      </widget>
+       <item row="1" column="1">
+        <widget class="QComboBox" name="combo_grandeza"/>
+       </item>
+       <item row="2" column="0">
+        <widget class="QLabel" name="label_3">
+         <property name="text">
+          <string>Limite máximo</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="1">
+        <widget class="QDoubleSpinBox" name="spin_limite">
+         <property name="decimals">
+          <number>2</number>
+         </property>
+         <property name="minimum">
+          <double>0.010000000000000</double>
+         </property>
+         <property name="maximum">
+          <double>1000000.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="1">
+        <widget class="QCheckBox" name="check_ativa">
+         <property name="text">
+          <string>Regra ativa</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
      </item>
     </layout>
    </item>
    <item>
     <widget class="QDialogButtonBox" name="button_box">
+     <property name="orientation">
+      <enum>Qt::Orientation::Horizontal</enum>
+     </property>
      <property name="standardButtons">
       <set>QDialogButtonBox::StandardButton::Cancel|QDialogButtonBox::StandardButton::Save</set>
      </property>
