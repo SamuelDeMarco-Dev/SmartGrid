@@ -256,3 +256,10 @@ class LimitesDialogController(QDialog):
             "limite_maximo": regra.limite_maximo,
             "ativa": regra.ativa,
         }
+
+if __name__ == "__main__":
+    import sys
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication(sys.argv)
+    janela_teste = LimitesDialogController()
+    janela_teste.exec()
