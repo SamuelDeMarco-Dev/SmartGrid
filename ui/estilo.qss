@@ -1,0 +1,177 @@
+/* Folha de estilo única do SmartGrid.
+ *
+ * Aplicada na QApplication em main.py, é o que mantém as quatro telas com a
+ * mesma paleta, a mesma tipografia e os mesmos espaçamentos.
+ *
+ * Paleta:
+ *   #1D4F80  azul institucional (títulos, destaques, curva do gráfico)
+ *   #2E7D32  verde  (normal / energizado / conectado)
+ *   #B26A00  âmbar  (atenção)
+ *   #C62828  vermelho (crítico / desenergizado / desconectado)
+ */
+
+QWidget {
+    background-color: #F4F6F8;
+    color: #1F2933;
+    font-family: "Segoe UI", "Noto Sans", sans-serif;
+    font-size: 10pt;
+}
+
+QFrame#frameCabecalho,
+QFrame#frameCabecalhoSerial,
+QFrame#frameCabecalhoDashboard,
+QFrame#frameCabecalhoHistorico {
+    background-color: #FFFFFF;
+    border: 1px solid #D6DBE1;
+    border-radius: 6px;
+    padding: 8px;
+}
+
+QScrollArea {
+    background: transparent;
+    border: none;
+}
+
+QFrame#frameNavegacao {
+    background-color: #FFFFFF;
+    border: 1px solid #D6DBE1;
+    border-radius: 6px;
+}
+
+QGroupBox {
+    background-color: #FFFFFF;
+    border: 1px solid #D6DBE1;
+    border-radius: 6px;
+    margin-top: 14px;
+    padding: 10px;
+    font-weight: bold;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    padding: 0 4px;
+    color: #1D4F80;
+}
+
+QPushButton {
+    background-color: #FFFFFF;
+    border: 1px solid #C3CAD3;
+    border-radius: 4px;
+    padding: 6px 14px;
+    min-height: 26px;
+}
+
+QPushButton:hover {
+    background-color: #EAF1F9;
+    border-color: #1D4F80;
+}
+
+QPushButton:pressed {
+    background-color: #D8E5F3;
+}
+
+QPushButton:disabled {
+    background-color: #EDEFF2;
+    color: #9AA5B1;
+    border-color: #DCE0E6;
+}
+
+QPushButton:checked {
+    background-color: #1D4F80;
+    color: #FFFFFF;
+    border-color: #1D4F80;
+    font-weight: bold;
+}
+
+QComboBox,
+QSpinBox,
+QDoubleSpinBox,
+QDateEdit,
+QLineEdit {
+    background-color: #FFFFFF;
+    border: 1px solid #C3CAD3;
+    border-radius: 4px;
+    padding: 4px 6px;
+    min-height: 24px;
+}
+
+QComboBox:focus,
+QSpinBox:focus,
+QDoubleSpinBox:focus,
+QDateEdit:focus,
+QLineEdit:focus {
+    border-color: #1D4F80;
+}
+
+QComboBox:disabled,
+QSpinBox:disabled,
+QDoubleSpinBox:disabled,
+QDateEdit:disabled {
+    background-color: #EDEFF2;
+    color: #9AA5B1;
+}
+
+QLCDNumber {
+    background-color: #FFFFFF;
+    border: 1px solid #D6DBE1;
+    border-radius: 4px;
+}
+
+QTableWidget,
+QListWidget {
+    background-color: #FFFFFF;
+    border: 1px solid #D6DBE1;
+    border-radius: 4px;
+    gridline-color: #E3E7EC;
+}
+
+QHeaderView::section {
+    background-color: #ECEFF3;
+    color: #1D4F80;
+    border: none;
+    border-right: 1px solid #D6DBE1;
+    border-bottom: 1px solid #D6DBE1;
+    padding: 6px;
+    font-weight: bold;
+}
+
+QTableWidget::item:selected,
+QListWidget::item:selected {
+    background-color: #D8E5F3;
+    color: #1F2933;
+}
+
+QSlider::groove:horizontal {
+    background: #D6DBE1;
+    height: 6px;
+    border-radius: 3px;
+}
+
+QSlider::handle:horizontal {
+    background: #1D4F80;
+    width: 16px;
+    margin: -6px 0;
+    border-radius: 8px;
+}
+
+QSlider::sub-page:horizontal {
+    background: #1D4F80;
+    height: 6px;
+    border-radius: 3px;
+}
+
+QMenuBar,
+QStatusBar {
+    background-color: #FFFFFF;
+    color: #1F2933;
+}
+
+QMenuBar::item:selected {
+    background-color: #D8E5F3;
+}
+
+QStatusBar {
+    border-top: 1px solid #D6DBE1;
+}

@@ -1,0 +1,511 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Dashboard</class>
+ <widget class="QWidget" name="Dashboard">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>900</width>
+    <height>660</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Dashboard de Monitoramento</string>
+  </property>
+  <layout class="QVBoxLayout" name="layoutRaiz">
+   <property name="spacing">
+    <number>0</number>
+   </property>
+   <property name="leftMargin">
+    <number>0</number>
+   </property>
+   <property name="topMargin">
+    <number>0</number>
+   </property>
+   <property name="rightMargin">
+    <number>0</number>
+   </property>
+   <property name="bottomMargin">
+    <number>0</number>
+   </property>
+   <item>
+    <widget class="QScrollArea" name="areaRolagem">
+     <property name="frameShape">
+      <enum>QFrame::Shape::NoFrame</enum>
+     </property>
+     <property name="widgetResizable">
+      <bool>true</bool>
+     </property>
+     <widget class="QWidget" name="conteudoDashboard">
+      <property name="geometry">
+       <rect>
+        <x>0</x>
+        <y>0</y>
+        <width>900</width>
+        <height>660</height>
+       </rect>
+      </property>
+      <layout class="QVBoxLayout" name="layoutPrincipal">
+       <property name="spacing">
+        <number>8</number>
+       </property>
+       <property name="leftMargin">
+        <number>10</number>
+       </property>
+       <property name="topMargin">
+        <number>10</number>
+       </property>
+       <property name="rightMargin">
+        <number>10</number>
+       </property>
+       <property name="bottomMargin">
+        <number>10</number>
+       </property>
+       <item>
+        <widget class="QFrame" name="frameCabecalhoDashboard">
+         <property name="frameShape">
+          <enum>QFrame::Shape::StyledPanel</enum>
+         </property>
+         <property name="frameShadow">
+          <enum>QFrame::Shadow::Raised</enum>
+         </property>
+         <layout class="QVBoxLayout" name="layoutCabecalhoDashboard">
+          <property name="spacing">
+           <number>2</number>
+          </property>
+          <item>
+           <widget class="QLabel" name="labelTituloDashboard">
+            <property name="font">
+             <font>
+              <pointsize>13</pointsize>
+              <bold>true</bold>
+             </font>
+            </property>
+            <property name="text">
+             <string>Dashboard de Monitoramento</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="labelStatusAquisicao">
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>28</height>
+          </size>
+         </property>
+         <property name="font">
+          <font>
+           <bold>true</bold>
+          </font>
+         </property>
+         <property name="alignment">
+          <set>Qt::AlignmentFlag::AlignCenter</set>
+         </property>
+         <property name="wordWrap">
+          <bool>true</bool>
+         </property>
+         <property name="text">
+          <string>Aguardando conexão serial</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QFrame" name="framePainelTelemetria">
+         <property name="frameShape">
+          <enum>QFrame::Shape::NoFrame</enum>
+         </property>
+         <layout class="QHBoxLayout" name="layoutTelemetria">
+          <property name="spacing">
+           <number>10</number>
+          </property>
+          <item>
+           <widget class="QGroupBox" name="grupoTensao">
+            <property name="title">
+             <string>Tensão (V)</string>
+            </property>
+            <layout class="QVBoxLayout" name="layoutTensao">
+             <property name="spacing">
+              <number>4</number>
+             </property>
+             <item>
+              <widget class="QLCDNumber" name="lcdTensao">
+               <property name="minimumSize">
+                <size>
+                 <width>0</width>
+                 <height>50</height>
+                </size>
+               </property>
+               <property name="styleSheet">
+                <string notr="true">color: #1D4F80;</string>
+               </property>
+               <property name="digitCount">
+                <number>6</number>
+               </property>
+               <property name="segmentStyle">
+                <enum>QLCDNumber::SegmentStyle::Flat</enum>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="labelTensaoRodape">
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignCenter</set>
+               </property>
+               <property name="wordWrap">
+                <bool>true</bool>
+               </property>
+               <property name="text">
+                <string>Tensão eficaz (V_RMS)</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <item>
+           <widget class="QGroupBox" name="grupoCorrente">
+            <property name="title">
+             <string>Corrente (A)</string>
+            </property>
+            <layout class="QVBoxLayout" name="layoutCorrente">
+             <property name="spacing">
+              <number>4</number>
+             </property>
+             <item>
+              <widget class="QLCDNumber" name="lcdCorrente">
+               <property name="minimumSize">
+                <size>
+                 <width>0</width>
+                 <height>50</height>
+                </size>
+               </property>
+               <property name="styleSheet">
+                <string notr="true">color: #1D4F80;</string>
+               </property>
+               <property name="digitCount">
+                <number>6</number>
+               </property>
+               <property name="segmentStyle">
+                <enum>QLCDNumber::SegmentStyle::Flat</enum>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="labelCorrenteRodape">
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignCenter</set>
+               </property>
+               <property name="wordWrap">
+                <bool>true</bool>
+               </property>
+               <property name="text">
+                <string>Corrente eficaz (I_RMS)</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <item>
+           <widget class="QGroupBox" name="grupoPotencia">
+            <property name="title">
+             <string>Potência (W)</string>
+            </property>
+            <layout class="QVBoxLayout" name="layoutPotencia">
+             <property name="spacing">
+              <number>4</number>
+             </property>
+             <item>
+              <widget class="QLCDNumber" name="lcdPotencia">
+               <property name="minimumSize">
+                <size>
+                 <width>0</width>
+                 <height>50</height>
+                </size>
+               </property>
+               <property name="styleSheet">
+                <string notr="true">color: #1D4F80;</string>
+               </property>
+               <property name="digitCount">
+                <number>6</number>
+               </property>
+               <property name="segmentStyle">
+                <enum>QLCDNumber::SegmentStyle::Flat</enum>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="labelPotenciaRodape">
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignCenter</set>
+               </property>
+               <property name="wordWrap">
+                <bool>true</bool>
+               </property>
+               <property name="text">
+                <string>Potência ativa (P = V × I)</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="layoutEstadoComandos">
+         <property name="spacing">
+          <number>10</number>
+         </property>
+         <item>
+          <widget class="QGroupBox" name="grupoDisjuntor">
+           <property name="title">
+            <string>Disjuntor / Chave de Proteção</string>
+           </property>
+           <layout class="QVBoxLayout" name="layoutDisjuntor">
+            <property name="spacing">
+             <number>6</number>
+            </property>
+            <item>
+             <widget class="QLabel" name="labelBadgeDisjuntor">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>38</height>
+               </size>
+              </property>
+              <property name="font">
+               <font>
+                <pointsize>10</pointsize>
+                <bold>true</bold>
+               </font>
+              </property>
+              <property name="alignment">
+               <set>Qt::AlignmentFlag::AlignCenter</set>
+              </property>
+              <property name="wordWrap">
+               <bool>true</bool>
+              </property>
+              <property name="text">
+               <string>Disjuntor: FECHADO / NORMAL</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel" name="labelDetalheDisjuntor">
+              <property name="alignment">
+               <set>Qt::AlignmentFlag::AlignCenter</set>
+              </property>
+              <property name="wordWrap">
+               <bool>true</bool>
+              </property>
+              <property name="text">
+               <string>Instalação energizada</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="botaoCorteEmergencia">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>44</height>
+               </size>
+              </property>
+              <property name="font">
+               <font>
+                <pointsize>11</pointsize>
+                <bold>true</bold>
+               </font>
+              </property>
+              <property name="text">
+               <string>CORTE DE EMERGÊNCIA</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="botaoSimularDisparo">
+              <property name="toolTip">
+               <string>Simula uma mudança espontânea vinda do hardware. Na Unidade 4 este gatilho é substituído pelo evento recebido na porta serial.</string>
+              </property>
+              <property name="text">
+               <string>Simular disparo</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item>
+          <widget class="QGroupBox" name="grupoSetpoint">
+           <property name="title">
+            <string>Limite de Alerta de Consumo</string>
+           </property>
+           <layout class="QVBoxLayout" name="layoutSetpoint">
+            <property name="spacing">
+             <number>6</number>
+            </property>
+            <item>
+             <widget class="QLabel" name="labelSetpoint">
+              <property name="wordWrap">
+               <bool>true</bool>
+              </property>
+              <property name="text">
+               <string>Potência máxima tolerada</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <layout class="QHBoxLayout" name="layoutControlesSetpoint">
+              <item>
+               <widget class="QSlider" name="sliderSetpoint">
+                <property name="minimum">
+                 <number>500</number>
+                </property>
+                <property name="maximum">
+                 <number>6000</number>
+                </property>
+                <property name="singleStep">
+                 <number>50</number>
+                </property>
+                <property name="pageStep">
+                 <number>250</number>
+                </property>
+                <property name="value">
+                 <number>3500</number>
+                </property>
+                <property name="orientation">
+                 <enum>Qt::Orientation::Horizontal</enum>
+                </property>
+                <property name="tickPosition">
+                 <enum>QSlider::TickPosition::TicksBelow</enum>
+                </property>
+                <property name="tickInterval">
+                 <number>500</number>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QDoubleSpinBox" name="spinSetpoint">
+                <property name="minimumSize">
+                 <size>
+                  <width>110</width>
+                  <height>0</height>
+                 </size>
+                </property>
+                <property name="suffix">
+                 <string> W</string>
+                </property>
+                <property name="decimals">
+                 <number>0</number>
+                </property>
+                <property name="minimum">
+                 <double>500.000000000000000</double>
+                </property>
+                <property name="maximum">
+                 <double>6000.000000000000000</double>
+                </property>
+                <property name="singleStep">
+                 <double>50.000000000000000</double>
+                </property>
+                <property name="value">
+                 <double>3500.000000000000000</double>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+            <item>
+             <widget class="QLabel" name="labelSituacaoProtecao">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>32</height>
+               </size>
+              </property>
+              <property name="font">
+               <font>
+                <bold>true</bold>
+               </font>
+              </property>
+              <property name="alignment">
+               <set>Qt::AlignmentFlag::AlignCenter</set>
+              </property>
+              <property name="wordWrap">
+               <bool>true</bool>
+              </property>
+              <property name="text">
+               <string>Consumo dentro do limite</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel" name="labelRegrasAtivas">
+              <property name="wordWrap">
+               <bool>true</bool>
+              </property>
+              <property name="text">
+               <string>Nenhuma regra carregada</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="botaoConfigurarLimites">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>34</height>
+               </size>
+              </property>
+              <property name="toolTip">
+               <string>Abre a janela modal de cadastro de regras de alerta.</string>
+              </property>
+              <property name="text">
+               <string>Configurar Limites…</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <widget class="QGroupBox" name="grupoGrafico">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Preferred" vsizetype="Expanding">
+           <horstretch>0</horstretch>
+           <verstretch>1</verstretch>
+          </sizepolicy>
+         </property>
+         <property name="minimumSize">
+          <size>
+           <width>0</width>
+           <height>145</height>
+          </size>
+         </property>
+         <property name="title">
+          <string>Curva de Demanda — últimas 24 horas</string>
+         </property>
+         <layout class="QVBoxLayout" name="layoutGrafico">
+          <property name="spacing">
+           <number>6</number>
+          </property>
+         </layout>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

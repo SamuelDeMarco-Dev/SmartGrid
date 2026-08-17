@@ -11,6 +11,7 @@ Nenhuma regra de negócio de telemetria, serial, limites ou histórico vive aqui
 
 from PyQt6.QtWidgets import QMainWindow, QWidget
 
+from models.barramento import barramento
 from ui.main_window_ui import Ui_MainWindow
 
 
@@ -29,6 +30,7 @@ class MainWindowController(QMainWindow, Ui_MainWindow):
         super().__init__()
         self.setupUi(self)
         self._conectar_navegacao()
+        self._conectar_barramento()
         self.atualizar_status_conexao(False, "Desconectado")
         self.ir_para("dashboard")
 
@@ -76,6 +78,10 @@ class MainWindowController(QMainWindow, Ui_MainWindow):
         self.actionHistorico.triggered.connect(lambda: self.ir_para("historico"))
         self.actionSair.triggered.connect(self.close)
 
+    def _conectar_barramento(self) -> None:
+        """A barra de status espelha o estado publicado pela tela serial."""
+        barramento.status_conexao_alterado.connect(self.atualizar_status_conexao)
+
     def _indice_da_pagina(self, nome: str) -> int:
         if nome not in self.PAGINAS:
             raise KeyError(
@@ -90,3 +96,5 @@ class MainWindowController(QMainWindow, Ui_MainWindow):
             "historico": self.botaoHistorico,
         }
         return botoes[nome]
+
+
