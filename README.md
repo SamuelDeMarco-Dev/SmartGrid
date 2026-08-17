@@ -21,6 +21,7 @@ Projeto da disciplina **Desenvolvimento de Aplicações Computacionais** — Uno
 - [Organização do Trabalho em Equipe](#organização-do-trabalho-em-equipe)
 - [Tecnologias](#tecnologias)
 - [Como Executar](#como-executar)
+- [Checklist da Entrega A1/1](#checklist-da-entrega-a11)
 - [Forma de Entrega e Apresentação](#forma-de-entrega-e-apresentação-a11)
 - [Regras Obrigatórias do Git](#regras-obrigatórias-do-git)
 - [Critérios Avaliativos](#critérios-avaliativos)
@@ -34,8 +35,8 @@ Projeto da disciplina **Desenvolvimento de Aplicações Computacionais** — Uno
 |---|---|---|
 | Samuel De Marco | [@SamuelDeMarco-Dev](https://github.com/SamuelDeMarco-Dev) | Arquitetura MVC, janela principal e Dashboard de Monitoramento |
 | Davy Josias Scheuermann | [@Davyjosias01](https://github.com/Davyjosias01) | Painel de Configuração da Comunicação Serial |
-| Lucas Zamoner | [@lucaszlocatelli](https://github.com/lucaszlocatelli) | Janela modal de Limites e Parâmetros |
-| *(preencher)* | *(preencher)* | Histórico de Eventos e Registros |
+| Lucas Zamoner Locatelli | [@lucaszlocatelli](https://github.com/lucaszlocatelli) | Diálogo Modal de Limites e Parâmetros |
+| Arthur De Marco Faggion | [@ArthurDeMarcoF](https://github.com/ArthurDeMarcoF) | Histórico de Eventos e Registros |
 
 > ⚠️ Todos os integrantes devem possuir commits registrados em seu próprio usuário do GitHub. Ver [Regras Obrigatórias do Git](#regras-obrigatórias-do-git).
 
@@ -80,8 +81,9 @@ O software supervisor recebe continuamente as amostras brutas dos sensores do mi
 
 - **Leituras de Telemetria:** indicadores visuais para Tensão (V), Corrente (A) e Potência Calculada (W).
 - **Indicador de Estado Binário:** sinalizador visual (LED virtual ou *badge*) indicando o status do Disjuntor/Chave de Proteção (**Aberto / Fechado**).
-- **Comandos de Acionamento:** botão de **"Corte Emergencial de Carga"** (relé) e controles para ajuste visual do limite de alerta de consumo.
-- **Gráfico de Tendência (com carga inicial de dados):** área de plotagem (`pyqtgraph` ou `matplotlib`) exibindo um histórico de consumo — ex.: curva de demanda das últimas 24 horas — **preenchido com dados amostrais no momento em que a tela abre**, para demonstrar a renderização do componente.
+- **Comandos de Acionamento:** botão de **"Corte Emergencial de Carga"** (relé), confirmação por `QMessageBox` e registro do comando no histórico.
+- **Configuração de Limites:** acesso ao diálogo modal de limites, com regras de alerta aplicadas ao dashboard por meio do barramento.
+- **Gráfico de Tendência (com carga inicial de dados):** área de plotagem (`pyqtgraph`) exibindo a curva de demanda das últimas 24 horas, **preenchida com dados amostrais no momento em que a tela abre**.
 
 ### 2. Painel de Configuração da Comunicação Serial
 
@@ -89,14 +91,16 @@ O software supervisor recebe continuamente as amostras brutas dos sensores do mi
 - **Baud Rate** (9600, 115200);
 - **Timeout**;
 - Botões de **Conectar / Desconectar**.
+- Atualização do status visual da conexão e publicação do estado no barramento.
 
-> Nesta etapa A1/1, a conexão apenas **atualiza o status visual na tela** — não há comunicação real.
+> Nesta etapa A1/1, a tela valida e simula a abertura da porta para integração visual. A comunicação real com o microcontrolador fica para a entrega final.
 
 ### 3. Janela de Configuração de Limites / Parâmetros (`QDialog` Modal)
 
 - Formulário secundário para cadastro de **regras de alerta** (ex.: limite máximo de corrente, limite máximo de tensão);
 - **No mínimo duas regras**;
-- Envio e resgate correto de parâmetros para a tela principal.
+- Envio e resgate correto de parâmetros para a tela principal;
+- Validações com `QMessageBox` e persistência em memória durante a execução.
 
 ### 4. Histórico de Eventos e Registros (`QTableWidget`)
 
@@ -104,6 +108,9 @@ O software supervisor recebe continuamente as amostras brutas dos sensores do mi
   - registros de cortes de emergência;
   - ultrapassagem de limite de corrente;
   - trocas de estado do disjuntor.
+- Filtros por tipo de evento e data inicial;
+- Limpeza do histórico com confirmação;
+- Eventos recebidos em tempo real pelo barramento.
 
 ---
 
@@ -128,7 +135,7 @@ P = V × I
 **Renderização no Dashboard**
 
 - Exibir os valores instantâneos de **V**, **I** e **P** em indicadores numéricos de alta visibilidade (`QLCDNumber` ou `QLabel` customizadas com destaque de cor);
-- Atualizar o **Gráfico de Tendência Temporal** (`pyqtgraph` ou `matplotlib`) plotando a curva de consumo de potência ao longo do tempo. O gráfico deve ser inicializado com **histórico pré-carregado** no momento da abertura da tela.
+- Atualizar o **Gráfico de Tendência Temporal** (`pyqtgraph`) plotando a curva de consumo de potência ao longo do tempo. O gráfico deve ser inicializado com **histórico pré-carregado** no momento da abertura da tela.
 
 ### 2. Monitoramento de Estado Binário e Segurança (Hardware → Desktop)
 
@@ -157,7 +164,7 @@ O software monitora o estado físico do **disjuntor/chave de proteção geral** 
 
 **Ajuste de Limite de Alerta de Consumo (Setpoints)**
 
-- O operador define um **limite máximo tolerável** de corrente ou potência através de campo numérico (`QSpinBox` / `QDoubleSpinBox`) ou seletor (`QSlider`).
+- O operador define um **limite máximo tolerável** de corrente ou potência através de campo numérico (`QDoubleSpinBox`) no diálogo de limites.
 
 **Lógica Local de Proteção de Software**
 
@@ -185,30 +192,51 @@ Toda a atividade do sistema é centralizada na `QTableWidget` de registros:
 
 ```
 SmartGrid/
-├── main.py                        # Ponto de entrada enxuto: apenas inicializa a aplicação
+├── main.py                        # Inicializa QApplication, estilo, aquisição e telas
 ├── requirements.txt
-├── ui/                            # Arquivos .ui do Qt Designer e telas compiladas .py
-│   ├── main_window.ui             #   → gerado pelo Qt Designer
-│   └── main_window_ui.py          #   → compilado via pyuic6 (NÃO editar manualmente)
 ├── controllers/                   # Lógica das janelas e eventos (Signals & Slots)
-│   └── main_window_controller.py  #   → shell que hospeda as telas
+│   ├── __init__.py
+│   ├── dashboard_controller.py
+│   ├── historico_controller.py
+│   ├── limites_dialog_controller.py
+│   ├── main_window_controller.py
+│   └── serial_config_controller.py
 ├── models/                        # Regras de negócio, entidades e dados
-│   ├── leitura.py                 #   → amostra de telemetria; potência derivada de P = V × I
-│   ├── evento.py                  #   → Evento e TipoEvento (Comando / Alerta / Status)
-│   ├── regra_alerta.py            #   → RegraAlerta e Grandeza (setpoints)
-│   ├── estado_disjuntor.py        #   → estado binário do disjuntor, com rótulo e cor
-│   ├── barramento.py              #   → canal de sinais entre as telas
-│   └── simulador_telemetria.py    #   → dados amostrais (sem hardware nesta entrega)
+│   ├── __init__.py
+│   ├── aquisicao.py               # Serviço que publica telemetria simulada
+│   ├── barramento.py              # Canal de sinais compartilhado entre telas
+│   ├── estado_disjuntor.py
+│   ├── evento.py
+│   ├── leitura.py
+│   ├── porta_serial.py            # Validação e simulação da porta serial
+│   ├── regra_alerta.py
+│   ├── repositorio_eventos.py
+│   ├── repositorio_regras.py
+│   └── simulador_telemetria.py
+├── ui/                            # Arquivos .ui e versões geradas pelo pyuic6
+│   ├── __init__.py
+│   ├── dashboard.ui
+│   ├── dashboard_ui.py
+│   ├── estilo.qss                 # Folha de estilo global
+│   ├── historico.ui
+│   ├── historico_ui.py
+│   ├── limites_dialog.ui
+│   ├── limites_dialog_ui.py
+│   ├── main_window.ui
+│   ├── main_window_ui.py
+│   ├── serial_config.ui
+│   └── serial_config_ui.py
 └── README.md
 ```
 
 ### Regras de Encapsulamento
 
 - **Nenhuma regra de negócio ou evento** deve ser escrita diretamente dentro dos arquivos gerados pelo Qt Designer;
-- Os arquivos compilados em `/ui` permanecem **completamente isolados** — são apenas descrição de layout;
-- Toda lógica de eventos (**Signals & Slots**) vive em `/controllers`;
-- `main.py` funciona **apenas como ponto de partida** da aplicação;
-- Organização de classes seguindo boas práticas de **POO** e legibilidade em Python.
+- Os arquivos `_ui.py` em `/ui` permanecem **completamente isolados** — são descrições de layout geradas pelo `pyuic6`;
+- Os arquivos `.ui` são mantidos como fonte editável do Qt Designer, e a folha `ui/estilo.qss` centraliza a aparência global;
+- Toda lógica de interação, validação visual e conexão de sinais vive em `/controllers`;
+- As regras de negócio, entidades, repositórios em memória, simulação de telemetria e serial ficam em `/models`;
+- `main.py` permanece como ponto de entrada e composição: cria a aplicação, aplica o estilo, inicia o serviço de aquisição, monta a janela principal e registra as telas no shell.
 
 ### Comunicação entre as Telas — Barramento de Eventos
 
@@ -216,11 +244,11 @@ Nenhum controller importa outro controller. As telas conversam por sinais public
 
 | Sinal | Emitido por | Consumido por |
 |---|---|---|
-| `leitura_recebida(Leitura)` | Dashboard | Dashboard (gráfico) |
+| `leitura_recebida(Leitura)` | Serviço de aquisição | Dashboard (indicadores e gráfico) |
 | `evento_registrado(Evento)` | Qualquer tela | Histórico de Eventos |
-| `estado_disjuntor_alterado(EstadoDisjuntor)` | Dashboard | Dashboard (badge), Histórico |
+| `estado_disjuntor_alterado(EstadoDisjuntor)` | Dashboard / aquisição | Dashboard (badge e comandos) |
 | `regras_alteradas(list[RegraAlerta])` | Diálogo de Limites | Dashboard (proteção por setpoint) |
-| `status_conexao_alterado(bool, str)` | Painel Serial | Janela principal (barra de status) |
+| `status_conexao_alterado(bool, str)` | Painel Serial | Janela principal, Dashboard e serviço de aquisição |
 
 ```python
 from models.barramento import barramento
@@ -230,7 +258,7 @@ barramento.evento_registrado.connect(self._adicionar_linha)
 barramento.registrar_evento(TipoEvento.COMANDO, "Corte de emergência acionado", "12.50 A / 2750 W")
 ```
 
-A janela principal expõe `registrar_pagina(nome, widget)` e `ir_para(nome)` — é assim que cada tela é encaixada no `QStackedWidget` do shell.
+A janela principal expõe `registrar_pagina(nome, widget)` e `ir_para(nome)`. O `main.py` usa esses métodos para encaixar `DashboardController`, `SerialConfigController` e `HistoricoController` no `QStackedWidget` do shell.
 
 ### Compilação das Telas do Qt Designer
 
@@ -274,48 +302,68 @@ git pull --rebase origin main          # antes de abrir o PR
 | Item | Uso |
 |---|---|
 | **Python 3** | Linguagem base |
-| **PyQt6 / PySide6** | Framework da interface gráfica |
+| **PyQt6** | Framework da interface gráfica |
 | **Qt Designer** | Construção visual das telas (`.ui`) com uso de *Layouts* |
-| **pyqtgraph** ou **matplotlib** | Gráfico de tendência de consumo |
+| **pyqtgraph** | Gráfico de tendência de consumo |
+| **numpy** | Apoio ao processamento e manipulação de dados numéricos |
 | **pyserial** | Comunicação serial com o microcontrolador *(Unidade 4)* |
 
 ### Componentes Qt Utilizados
 
-`QLCDNumber` · `QLabel` · `QComboBox` · `QSpinBox` / `QDoubleSpinBox` · `QSlider` · `QPushButton` · `QTableWidget` · `QDateEdit` · `QDialog` (modal) · `QMessageBox` (`question` / `warning`)
+`QLCDNumber` · `QLabel` · `QComboBox` · `QSpinBox` / `QDoubleSpinBox` · `QPushButton` · `QTableWidget` · `QDateEdit` · `QDialog` (modal) · `QMessageBox` (`question` / `warning`)
 
 ---
 
 ## Como Executar
 
-```bash
-git clone git@github.com:SamuelDeMarco-Dev/SmartGrid.git
-```
-
-```bash
+```powershell
+git clone https://github.com/SamuelDeMarco-Dev/SmartGrid.git
 cd SmartGrid
 ```
 
-```bash
-python -m venv .venv
+No Windows PowerShell:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
 ```
 
-```bash
-.venv\Scripts\activate
-```
+Com o ambiente virtual ativo:
 
-```bash
-pip install -r requirements.txt
-```
-
-```bash
+```powershell
+python -m pip install -r requirements.txt
 python main.py
 ```
 
-> Em Linux/macOS, ative o ambiente virtual com `source .venv/bin/activate`.
->
+Se a política de execução bloquear a ativação do ambiente virtual, use diretamente o Python da `.venv`:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe main.py
+```
+
+No Linux/macOS:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python main.py
+```
+
 > Execute sempre a partir da raiz do projeto (`SmartGrid/`) — é de lá que os pacotes `ui`, `controllers` e `models` são importados.
 
-**Requisitos:** Python 3.10 ou superior. As dependências estão em `requirements.txt` (PyQt6, pyqtgraph, numpy e pyserial).
+**Requisitos:** Python 3.10 ou superior. As dependências documentadas são exatamente as de `requirements.txt`: `PyQt6`, `pyqtgraph`, `numpy` e `pyserial`.
+
+---
+
+## Checklist da Entrega A1/1
+
+- [x] Critério 1 — Arquitetura MVC e separação de responsabilidades
+- [x] Critério 2 — Interface gráfica, layouts e navegação
+- [x] Critério 3 — Telemetria, disjuntor e gráfico pré-carregado
+- [x] Critério 4 — QDialog, QTableWidget, QComboBox, QDateEdit e QMessageBox
+- [x] Critério 5 — README, Git e organização do trabalho
 
 ---
 
