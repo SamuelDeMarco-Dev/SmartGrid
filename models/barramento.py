@@ -28,8 +28,16 @@ class Barramento(QObject):
     #: Nova amostra de telemetria disponível.
     leitura_recebida = pyqtSignal(Leitura)
 
-    #: Algo aconteceu e precisa entrar na tabela de auditoria.
+    #: PEDIDO de gravação: algo aconteceu e precisa entrar na auditoria.
+    #: Quem publica um evento emite este sinal; o ``GravadorEventos`` o
+    #: persiste no SQLite. Telas NÃO devem escutá-lo para exibir linhas.
     evento_registrado = pyqtSignal(Evento)
+
+    #: CONFIRMAÇÃO: o evento já está gravado no banco. É o sinal que a tabela
+    #: do histórico escuta, para só mostrar o que de fato foi persistido.
+    #: Emitido pelo ``GravadorEventos`` (ou pelo serviço de corte emergencial,
+    #: depois do COMMIT da sua própria transação).
+    evento_persistido = pyqtSignal(Evento)
 
     #: O disjuntor mudou de estado (por comando ou espontaneamente).
     estado_disjuntor_alterado = pyqtSignal(EstadoDisjuntor)
