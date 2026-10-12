@@ -18,8 +18,12 @@ class RepositorioEventos:
         """Retorna os eventos do mais recente para o mais antigo."""
         return list(self._eventos)
 
-    def adicionar(self, evento: Evento) -> None:
-        """Adiciona um evento ao repositório preservando a ordenação."""
+    def adicionar(self, evento: Evento, conn=None) -> None:
+        """Adiciona um evento ao repositório preservando a ordenação.
+
+        ``conn`` é aceito por contrato (transação externa) e ignorado enquanto
+        o repositório for em memória; a versão SQLite o usará.
+        """
         if not isinstance(evento, Evento):
             raise TypeError("O repositório aceita somente objetos Evento.")
 
