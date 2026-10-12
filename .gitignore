@@ -18,3 +18,13 @@ __pycache__/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# SQLite, config e logs gerados em execução
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+data/config.json
+logs/*.log
+!data/.gitkeep
+!logs/.gitkeep
