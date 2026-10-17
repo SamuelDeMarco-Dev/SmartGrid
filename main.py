@@ -13,7 +13,11 @@ from controllers.dashboard_controller import DashboardController
 from controllers.historico_controller import HistoricoController
 from controllers.main_window_controller import MainWindowController
 from controllers.serial_config_controller import SerialConfigController
+from database.connection import Database
 from models.aquisicao import ServicoAquisicao
+from models.repositorio_dispositivos_provisorio import RepositorioDispositivosProvisorio
+from models.repositorio_eventos import RepositorioEventos
+from models.servico_corte import ServicoCorteEmergencial
 
 FOLHA_DE_ESTILO = Path(__file__).parent / "ui" / "estilo.qss"
 
@@ -25,7 +29,11 @@ def _aplicar_estilo(app: QApplication) -> None:
 
 def _montar_telas(janela: MainWindowController) -> None:
     """Encaixa as telas nas páginas reservadas pelo shell da janela principal."""
-    janela.registrar_pagina("dashboard", DashboardController())
+    # TODO(#28): trocar pelo RepositorioDispositivos definitivo.
+    servico_corte = ServicoCorteEmergencial(
+        RepositorioDispositivosProvisorio(), RepositorioEventos()
+    )
+    janela.registrar_pagina("dashboard", DashboardController(servico_corte))
     janela.registrar_pagina("serial", SerialConfigController())
     janela.registrar_pagina("historico", HistoricoController())
     janela.ir_para("dashboard")
@@ -34,6 +42,9 @@ def _montar_telas(janela: MainWindowController) -> None:
 def main() -> int:
     app = QApplication(sys.argv)
     _aplicar_estilo(app)
+
+    # TODO(#30): configurar_log(), ConfigManager e tratamento de falha do banco.
+    Database.init_db()
 
     # Fonte da telemetria: publica leituras no barramento enquanto a porta
     # serial estiver aberta. Fica sob a guarda da QApplication para viver
