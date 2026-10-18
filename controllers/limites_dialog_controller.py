@@ -1,9 +1,15 @@
+import logging
+import math
+import sqlite3
+
 from PyQt6.QtWidgets import QDialog, QMessageBox
 from ui.limites_dialog_ui import Ui_Dialog
 from models.barramento import barramento
 from models.evento import TipoEvento
 from models.regra_alerta import Grandeza, RegraAlerta
 from models.repositorio_regras import RepositorioRegras
+
+logger = logging.getLogger("smartgrid")
 
 
 class LimitesDialogController(QDialog):
@@ -17,7 +23,16 @@ class LimitesDialogController(QDialog):
         self.ui.setupUi(self)
 
         self.repositorio = repositorio
-        self.regras_salvas = self.repositorio.obter_regras()
+        try:
+            self.regras_salvas = self.repositorio.obter_regras()
+        except sqlite3.Error as erro:
+            logger.error("Erro de banco ao carregar regras de limites: %s", erro)
+            QMessageBox.critical(
+                self,
+                "Erro ao carregar limites",
+                "Não foi possível carregar as regras salvas. Verifique o banco de dados.",
+            )
+            self.regras_salvas = []
 
         self._rascunhos = [
             self._regra_para_rascunho(regra) for regra in self.regras_salvas
@@ -35,16 +50,13 @@ class LimitesDialogController(QDialog):
         for grandeza in (Grandeza.CORRENTE, Grandeza.TENSAO, Grandeza.POTENCIA):
             self.ui.combo_grandeza.addItem(grandeza.rotulo, grandeza)
 
-        self.ui.spin_limite.setDecimals(2)
-        self.ui.spin_limite.setRange(0.01, 1_000_000.00)
-        self.ui.spin_limite.setSingleStep(1.00)
         self._atualizar_sufixo_limite()
 
     def _conectar_sinais(self) -> None:
         self.ui.listaRegras.currentRowChanged.connect(self._selecionar_regra)
         self.ui.input_nome.textChanged.connect(self._registrar_alteracao)
         self.ui.combo_grandeza.currentIndexChanged.connect(self._ao_grandeza_alterada)
-        self.ui.spin_limite.valueChanged.connect(self._registrar_alteracao)
+        self.ui.input_limite.textChanged.connect(self._registrar_alteracao)
         self.ui.check_ativa.toggled.connect(self._registrar_alteracao)
         self.ui.button_box.accepted.connect(self.validar_e_salvar)
         self.ui.button_box.rejected.connect(self.confirmar_cancelamento)
@@ -79,7 +91,7 @@ class LimitesDialogController(QDialog):
         try:
             self.ui.input_nome.setText(rascunho["nome"])
             self._selecionar_grandeza(rascunho["grandeza"])
-            self.ui.spin_limite.setValue(rascunho["limite_maximo"])
+            self.ui.input_limite.setText(rascunho["limite_maximo"])
             self.ui.check_ativa.setChecked(rascunho["ativa"])
             self._atualizar_sufixo_limite()
         finally:
@@ -105,7 +117,9 @@ class LimitesDialogController(QDialog):
     def _atualizar_sufixo_limite(self) -> None:
         grandeza = self.ui.combo_grandeza.currentData()
         if isinstance(grandeza, Grandeza):
-            self.ui.spin_limite.setSuffix(f" {grandeza.unidade}")
+            self.ui.input_limite.setPlaceholderText(
+                f"Informe o limite em {grandeza.unidade}"
+            )
 
     def _sincronizar_formulario_com_rascunho(self) -> None:
         if self._indice_atual < 0 or self._indice_atual >= len(self._rascunhos):
@@ -114,7 +128,7 @@ class LimitesDialogController(QDialog):
         self._rascunhos[self._indice_atual] = {
             "nome": self.ui.input_nome.text(),
             "grandeza": self.ui.combo_grandeza.currentData(),
-            "limite_maximo": self.ui.spin_limite.value(),
+            "limite_maximo": self.ui.input_limite.text(),
             "ativa": self.ui.check_ativa.isChecked(),
         }
 
@@ -134,8 +148,17 @@ class LimitesDialogController(QDialog):
         if novas_regras is None:
             return
 
-        self.repositorio.salvar_regras(novas_regras)
-        self.regras_salvas = self.repositorio.obter_regras()
+        try:
+            self.repositorio.salvar_regras(novas_regras)
+            self.regras_salvas = self.repositorio.obter_regras()
+        except sqlite3.Error as erro:
+            logger.error("Erro de banco ao salvar regras de limites: %s", erro)
+            QMessageBox.critical(
+                self,
+                "Erro ao salvar limites",
+                "Não foi possível salvar as regras. Nenhuma alteração foi aplicada.",
+            )
+            return
         self._rascunhos = [
             self._regra_para_rascunho(regra) for regra in self.regras_salvas
         ]
@@ -154,43 +177,63 @@ class LimitesDialogController(QDialog):
 
         for indice, rascunho in enumerate(self._rascunhos):
             nome = rascunho["nome"].strip()
-            limite = float(rascunho["limite_maximo"])
+            limite_texto = rascunho["limite_maximo"].strip()
             grandeza = rascunho["grandeza"]
 
             if not nome:
-                self._selecionar_indice_com_erro(indice)
-                QMessageBox.warning(
-                    self,
-                    "Aviso",
+                self._avisar_entrada_invalida(
+                    indice,
+                    "nome",
+                    rascunho["nome"],
                     "O nome da regra não pode ficar vazio.",
-                )
-                return None
-
-            if limite <= 0:
-                self._selecionar_indice_com_erro(indice)
-                QMessageBox.warning(
-                    self,
-                    "Aviso",
-                    "O limite máximo deve ser maior que zero.",
-                )
-                return None
-
-            if not isinstance(grandeza, Grandeza):
-                self._selecionar_indice_com_erro(indice)
-                QMessageBox.warning(
-                    self,
-                    "Aviso",
-                    "Selecione uma grandeza válida para a regra.",
                 )
                 return None
 
             nome_normalizado = self._normalizar_nome(nome)
             if nome_normalizado in nomes_normalizados:
-                self._selecionar_indice_com_erro(indice)
-                QMessageBox.warning(
-                    self,
-                    "Aviso",
+                self._avisar_entrada_invalida(
+                    indice,
+                    "nome",
+                    nome,
                     "Não é permitido cadastrar regras com nomes duplicados.",
+                )
+                return None
+
+            if not limite_texto:
+                self._avisar_entrada_invalida(
+                    indice,
+                    "limite_maximo",
+                    limite_texto,
+                    "O limite máximo não pode ficar vazio.",
+                )
+                return None
+
+            try:
+                limite = float(limite_texto.replace(",", "."))
+            except ValueError:
+                self._avisar_entrada_invalida(
+                    indice,
+                    "limite_maximo",
+                    limite_texto,
+                    "O limite máximo deve ser um número.",
+                )
+                return None
+
+            if not math.isfinite(limite) or limite <= 0:
+                self._avisar_entrada_invalida(
+                    indice,
+                    "limite_maximo",
+                    limite_texto,
+                    "O limite máximo deve ser maior que zero.",
+                )
+                return None
+
+            if not isinstance(grandeza, Grandeza):
+                self._avisar_entrada_invalida(
+                    indice,
+                    "grandeza",
+                    grandeza,
+                    "Selecione uma grandeza válida para a regra.",
                 )
                 return None
 
@@ -209,6 +252,13 @@ class LimitesDialogController(QDialog):
     def _selecionar_indice_com_erro(self, indice: int) -> None:
         if self.ui.listaRegras.currentRow() != indice:
             self.ui.listaRegras.setCurrentRow(indice)
+
+    def _avisar_entrada_invalida(
+        self, indice: int, campo: str, valor: object, mensagem: str
+    ) -> None:
+        self._selecionar_indice_com_erro(indice)
+        logger.warning("Entrada inválida em limites: %s=%r", campo, valor)
+        QMessageBox.warning(self, "Entrada inválida", mensagem)
 
     @staticmethod
     def _normalizar_nome(nome: str) -> str:
@@ -248,6 +298,6 @@ class LimitesDialogController(QDialog):
         return {
             "nome": regra.nome,
             "grandeza": regra.grandeza,
-            "limite_maximo": regra.limite_maximo,
+            "limite_maximo": f"{regra.limite_maximo:g}",
             "ativa": regra.ativa,
         }
