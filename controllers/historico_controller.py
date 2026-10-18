@@ -2,6 +2,7 @@
 
 import logging
 import sqlite3
+from datetime import date
 
 from PyQt6.QtCore import QDate
 from PyQt6.QtGui import QBrush, QColor
@@ -50,6 +51,9 @@ class HistoricoController(QWidget, Ui_Historico):
             except sqlite3.Error as erro:
                 self._tratar_erro_banco("carregar o histórico", erro)
                 return
+            except Exception as erro:
+                self._tratar_erro_inesperado("carregar o histórico", erro)
+                return
 
         self.tabelaEventos.setRowCount(0)
         self.tabelaEventos.setRowCount(len(eventos))
@@ -66,12 +70,21 @@ class HistoricoController(QWidget, Ui_Historico):
     def aplicar_filtros(self) -> None:
         """Atualiza a tabela usando os filtros selecionados na tela."""
         try:
+            data_inicio = self._data_inicio_validada()
+        except ValueError as erro:
+            self._tratar_data_invalida(str(erro))
+            return
+
+        try:
             eventos = self.repositorio.filtrar(
                 tipo=self._tipo_selecionado(),
-                data_inicio=self.dateFiltroInicio.date().toPyDate(),
+                data_inicio=data_inicio,
             )
         except sqlite3.Error as erro:
             self._tratar_erro_banco("filtrar o histórico", erro)
+            return
+        except Exception as erro:
+            self._tratar_erro_inesperado("filtrar o histórico", erro)
             return
 
         self.atualizar_tabela(eventos)
@@ -97,11 +110,15 @@ class HistoricoController(QWidget, Ui_Historico):
             return
 
         try:
-            self.repositorio.limpar()
+            quantidade_removida = self.repositorio.limpar()
         except sqlite3.Error as erro:
             self._tratar_erro_banco("limpar o histórico", erro)
             return
+        except Exception as erro:
+            self._tratar_erro_inesperado("limpar o histórico", erro)
+            return
 
+        logger.info("Histórico limpo (%d registros)", quantidade_removida)
         self.aplicar_filtros()
 
     def _configurar_filtros(self) -> None:
@@ -144,6 +161,18 @@ class HistoricoController(QWidget, Ui_Historico):
         texto = self.comboTipoEvento.currentText()
         return self._TIPOS_POR_TEXTO.get(texto)
 
+    def _data_inicio_validada(self) -> date:
+        data_qt = self.dateFiltroInicio.date()
+        if not data_qt.isValid():
+            raise ValueError("Informe uma data inicial válida.")
+
+        if data_qt > QDate.currentDate():
+            raise ValueError(
+                "A data inicial não pode ser posterior à data atual."
+            )
+
+        return data_qt.toPyDate()
+
     def _aplicar_estilo_evento(
         self, evento: Evento, itens: list[QTableWidgetItem]
     ) -> None:
@@ -165,6 +194,22 @@ class HistoricoController(QWidget, Ui_Historico):
         QMessageBox.critical(
             self,
             "Erro no banco de dados",
+            (
+                f"Não foi possível {acao}.\n\n"
+                "O banco de dados está temporariamente indisponível ou em uso. "
+                "Tente novamente em instantes."
+            ),
+        )
+
+    def _tratar_data_invalida(self, mensagem: str) -> None:
+        logger.warning("Filtro de data inválido: %s", mensagem)
+        QMessageBox.warning(self, "Filtro de data", mensagem)
+
+    def _tratar_erro_inesperado(self, acao: str, erro: Exception) -> None:
+        logger.error("Erro inesperado ao %s: %s", acao, erro)
+        QMessageBox.critical(
+            self,
+            "Erro inesperado",
             (
                 f"Não foi possível {acao}.\n\n"
                 "Tente novamente. Se o problema persistir, consulte os logs."

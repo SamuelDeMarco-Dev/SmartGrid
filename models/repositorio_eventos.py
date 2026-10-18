@@ -81,14 +81,21 @@ class RepositorioEventos:
 
         return self._consultar(sql, parametros)
 
-    def limpar(self, conn: sqlite3.Connection | None = None) -> None:
-        """Remove todos os eventos, usando uma transação externa se fornecida."""
+    def limpar(self, conn: sqlite3.Connection | None = None) -> int:
+        """Remove os eventos e retorna a quantidade de registros afetados.
+
+        Quando a conexão não é fornecida, o retorno só acontece depois do
+        commit executado por ``Database.transacao()``.
+        """
         if conn is not None:
-            conn.execute("DELETE FROM eventos")
-            return
+            cursor = conn.execute("DELETE FROM eventos")
+            return cursor.rowcount
 
         with Database.transacao() as conexao:
-            conexao.execute("DELETE FROM eventos")
+            cursor = conexao.execute("DELETE FROM eventos")
+            quantidade_removida = cursor.rowcount
+
+        return quantidade_removida
 
     def _consultar(
         self, sql: str, parametros: list[str] | None = None
