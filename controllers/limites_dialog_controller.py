@@ -3,25 +3,20 @@ from ui.limites_dialog_ui import Ui_Dialog
 from models.barramento import barramento
 from models.evento import TipoEvento
 from models.regra_alerta import Grandeza, RegraAlerta
-from models.repositorio_regras import (
-    RepositorioRegras,
-    repositorio_regras_compartilhado,
-)
+from models.repositorio_regras import RepositorioRegras
 
 
 class LimitesDialogController(QDialog):
     def __init__(
         self,
+        repositorio: RepositorioRegras,
         parent=None,
-        repositorio: RepositorioRegras | None = None,
     ):
         super().__init__(parent)
         self.ui = Ui_Dialog()
         self.ui.setupUi(self)
 
-        self.repositorio = (
-            repositorio if repositorio is not None else repositorio_regras_compartilhado
-        )
+        self.repositorio = repositorio
         self.regras_salvas = self.repositorio.obter_regras()
 
         self._rascunhos = [

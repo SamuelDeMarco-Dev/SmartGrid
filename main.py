@@ -13,7 +13,9 @@ from controllers.dashboard_controller import DashboardController
 from controllers.historico_controller import HistoricoController
 from controllers.main_window_controller import MainWindowController
 from controllers.serial_config_controller import SerialConfigController
+from database.connection import Database
 from models.aquisicao import ServicoAquisicao
+from models.repositorio_regras import RepositorioRegras
 
 FOLHA_DE_ESTILO = Path(__file__).parent / "ui" / "estilo.qss"
 
@@ -23,9 +25,11 @@ def _aplicar_estilo(app: QApplication) -> None:
     app.setStyleSheet(FOLHA_DE_ESTILO.read_text(encoding="utf-8"))
 
 
-def _montar_telas(janela: MainWindowController) -> None:
+def _montar_telas(
+    janela: MainWindowController, repositorio_regras: RepositorioRegras
+) -> None:
     """Encaixa as telas nas páginas reservadas pelo shell da janela principal."""
-    janela.registrar_pagina("dashboard", DashboardController())
+    janela.registrar_pagina("dashboard", DashboardController(repositorio_regras))
     janela.registrar_pagina("serial", SerialConfigController())
     janela.registrar_pagina("historico", HistoricoController())
     janela.ir_para("dashboard")
@@ -34,6 +38,8 @@ def _montar_telas(janela: MainWindowController) -> None:
 def main() -> int:
     app = QApplication(sys.argv)
     _aplicar_estilo(app)
+    Database.init_db()
+    repositorio_regras = RepositorioRegras()
 
     # Fonte da telemetria: publica leituras no barramento enquanto a porta
     # serial estiver aberta. Fica sob a guarda da QApplication para viver
@@ -41,7 +47,7 @@ def main() -> int:
     ServicoAquisicao(parent=app)
 
     janela = MainWindowController()
-    _montar_telas(janela)
+    _montar_telas(janela, repositorio_regras)
     janela.show()
 
     return app.exec()
