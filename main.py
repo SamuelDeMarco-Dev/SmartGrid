@@ -15,7 +15,7 @@ from controllers.main_window_controller import MainWindowController
 from controllers.serial_config_controller import SerialConfigController
 from database.connection import Database
 from models.aquisicao import ServicoAquisicao
-from models.repositorio_regras import RepositorioRegras
+from models.log_config import configurar_log
 
 FOLHA_DE_ESTILO = Path(__file__).parent / "ui" / "estilo.qss"
 
@@ -36,6 +36,7 @@ def _montar_telas(
 
 
 def main() -> int:
+    configurar_log()
     app = QApplication(sys.argv)
     _aplicar_estilo(app)
     Database.init_db()
