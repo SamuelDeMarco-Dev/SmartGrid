@@ -1,34 +1,54 @@
-"""Repositório em memória dos eventos do histórico."""
+"""Repositório SQLite dos eventos do histórico."""
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+import sqlite3
+from datetime import date, datetime, time
 
+from database.connection import Database
 from models.evento import Evento, TipoEvento
+
+FORMATO_DATA_HORA_BANCO = "%Y-%m-%d %H:%M:%S"
 
 
 class RepositorioEventos:
-    """Mantém os eventos registrados para exibição posterior na tela."""
+    """Persiste e consulta os eventos exibidos na tela de histórico."""
 
-    def __init__(self) -> None:
-        self._eventos: list[Evento] = self._criar_eventos_amostrais()
-        self._ordenar()
-
-    def listar(self) -> list[Evento]:
+    def listar_todos(self) -> list[Evento]:
         """Retorna os eventos do mais recente para o mais antigo."""
-        return list(self._eventos)
+        return self._consultar(
+            """
+            SELECT data_hora, tipo_evento, descricao, valor_medido
+            FROM eventos
+            ORDER BY data_hora DESC, id DESC
+            """
+        )
 
-    def adicionar(self, evento: Evento, conn=None) -> None:
-        """Adiciona um evento ao repositório preservando a ordenação.
-
-        ``conn`` é aceito por contrato (transação externa) e ignorado enquanto
-        o repositório for em memória; a versão SQLite o usará.
-        """
+    def adicionar(
+        self, evento: Evento, conn: sqlite3.Connection | None = None
+    ) -> None:
+        """Persiste um evento, participando de uma transação externa se fornecida."""
         if not isinstance(evento, Evento):
             raise TypeError("O repositório aceita somente objetos Evento.")
 
-        self._eventos.append(evento)
-        self._ordenar()
+        parametros = (
+            evento.data_hora.strftime(FORMATO_DATA_HORA_BANCO),
+            evento.tipo.value,
+            evento.valor_medido,
+            evento.descricao,
+        )
+        sql = (
+            "INSERT INTO eventos "
+            "(data_hora, tipo_evento, valor_medido, descricao) "
+            "VALUES (?, ?, ?, ?)"
+        )
+
+        if conn is not None:
+            conn.execute(sql, parametros)
+            return
+
+        with Database.transacao() as conexao:
+            conexao.execute(sql, parametros)
 
     def filtrar(
         self,
@@ -39,28 +59,62 @@ class RepositorioEventos:
         if tipo is not None and not isinstance(tipo, TipoEvento):
             raise TypeError("tipo deve ser uma instância de TipoEvento ou None.")
 
-        data_limite = self._normalizar_data_inicio(data_inicio)
-        eventos = self._eventos
+        condicoes: list[str] = []
+        parametros: list[str] = []
 
         if tipo is not None:
-            eventos = [evento for evento in eventos if evento.tipo == tipo]
+            condicoes.append("tipo_evento = ?")
+            parametros.append(tipo.value)
 
+        data_limite = self._normalizar_data_inicio(data_inicio)
         if data_limite is not None:
-            eventos = [
-                evento for evento in eventos if evento.data_hora >= data_limite
-            ]
+            condicoes.append("data_hora >= ?")
+            parametros.append(data_limite.strftime(FORMATO_DATA_HORA_BANCO))
 
-        return list(eventos)
+        sql = (
+            "SELECT data_hora, tipo_evento, descricao, valor_medido "
+            "FROM eventos"
+        )
+        if condicoes:
+            sql += " WHERE " + " AND ".join(condicoes)
+        sql += " ORDER BY data_hora DESC, id DESC"
 
-    def limpar(self) -> None:
-        """Remove todos os eventos armazenados."""
-        self._eventos.clear()
+        return self._consultar(sql, parametros)
 
-    def _ordenar(self) -> None:
-        self._eventos.sort(key=lambda evento: evento.data_hora, reverse=True)
+    def limpar(self, conn: sqlite3.Connection | None = None) -> None:
+        """Remove todos os eventos, usando uma transação externa se fornecida."""
+        if conn is not None:
+            conn.execute("DELETE FROM eventos")
+            return
 
+        with Database.transacao() as conexao:
+            conexao.execute("DELETE FROM eventos")
+
+    def _consultar(
+        self, sql: str, parametros: list[str] | None = None
+    ) -> list[Evento]:
+        conexao = Database.conectar()
+        try:
+            linhas = conexao.execute(sql, parametros or []).fetchall()
+        finally:
+            conexao.close()
+
+        return [self._evento_da_linha(linha) for linha in linhas]
+
+    @staticmethod
+    def _evento_da_linha(linha: sqlite3.Row) -> Evento:
+        return Evento(
+            data_hora=datetime.strptime(
+                linha["data_hora"], FORMATO_DATA_HORA_BANCO
+            ),
+            tipo=TipoEvento(linha["tipo_evento"]),
+            descricao=linha["descricao"],
+            valor_medido=linha["valor_medido"] or "",
+        )
+
+    @staticmethod
     def _normalizar_data_inicio(
-        self, data_inicio: date | datetime | None
+        data_inicio: date | datetime | None,
     ) -> datetime | None:
         if data_inicio is None:
             return None
@@ -72,43 +126,3 @@ class RepositorioEventos:
             return datetime.combine(data_inicio, time.min)
 
         raise TypeError("data_inicio deve ser date, datetime ou None.")
-
-    def _criar_eventos_amostrais(self) -> list[Evento]:
-        agora = datetime.now()
-
-        return [
-            Evento(
-                data_hora=agora - timedelta(minutes=3),
-                tipo=TipoEvento.STATUS,
-                descricao="Sistema iniciado",
-            ),
-            Evento(
-                data_hora=agora - timedelta(minutes=8),
-                tipo=TipoEvento.STATUS,
-                descricao="Comunicação serial conectada",
-                valor_medido="COM3 / 9600 bps",
-            ),
-            Evento(
-                data_hora=agora - timedelta(minutes=15),
-                tipo=TipoEvento.COMANDO,
-                descricao="Limite de corrente configurado",
-                valor_medido="15.00 A",
-            ),
-            Evento(
-                data_hora=agora - timedelta(minutes=27),
-                tipo=TipoEvento.ALERTA,
-                descricao="Limite de potência ultrapassado",
-                valor_medido="3820 W",
-            ),
-            Evento(
-                data_hora=agora - timedelta(minutes=42),
-                tipo=TipoEvento.COMANDO,
-                descricao="Corte de emergência acionado",
-            ),
-            Evento(
-                data_hora=agora - timedelta(hours=1, minutes=5),
-                tipo=TipoEvento.ALERTA,
-                descricao="Disjuntor aberto por proteção",
-                valor_medido="18.40 A",
-            ),
-        ]

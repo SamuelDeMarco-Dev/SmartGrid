@@ -1,5 +1,8 @@
 """Controller da tela de historico de eventos."""
 
+import logging
+import sqlite3
+
 from PyQt6.QtCore import QDate
 from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (
@@ -14,6 +17,8 @@ from models.barramento import barramento
 from models.evento import Evento, TipoEvento
 from models.repositorio_eventos import RepositorioEventos
 from ui.historico_ui import Ui_Historico
+
+logger = logging.getLogger("smartgrid")
 
 
 class HistoricoController(QWidget, Ui_Historico):
@@ -40,7 +45,12 @@ class HistoricoController(QWidget, Ui_Historico):
     def atualizar_tabela(self, eventos: list[Evento] | None = None) -> None:
         """Recarrega a tabela com os eventos recebidos ou todos do repositorio."""
         if eventos is None:
-            eventos = self.repositorio.listar()
+            try:
+                eventos = self.repositorio.listar_todos()
+            except sqlite3.Error as erro:
+                self._tratar_erro_banco("carregar o histórico", erro)
+                return
+
         self.tabelaEventos.setRowCount(0)
         self.tabelaEventos.setRowCount(len(eventos))
 
@@ -55,15 +65,19 @@ class HistoricoController(QWidget, Ui_Historico):
 
     def aplicar_filtros(self) -> None:
         """Atualiza a tabela usando os filtros selecionados na tela."""
-        eventos = self.repositorio.filtrar(
-            tipo=self._tipo_selecionado(),
-            data_inicio=self.dateFiltroInicio.date().toPyDate(),
-        )
+        try:
+            eventos = self.repositorio.filtrar(
+                tipo=self._tipo_selecionado(),
+                data_inicio=self.dateFiltroInicio.date().toPyDate(),
+            )
+        except sqlite3.Error as erro:
+            self._tratar_erro_banco("filtrar o histórico", erro)
+            return
+
         self.atualizar_tabela(eventos)
 
-    def registrar_evento(self, evento: Evento) -> None:
-        """Armazena um evento recebido e reaplica os filtros atuais."""
-        self.repositorio.adicionar(evento)
+    def atualizar_apos_evento_persistido(self, evento: Evento) -> None:
+        """Atualiza a tela depois que um evento já foi persistido."""
         self.aplicar_filtros()
 
     def limpar_historico(self) -> None:
@@ -82,11 +96,17 @@ class HistoricoController(QWidget, Ui_Historico):
         if resposta != QMessageBox.StandardButton.Yes:
             return
 
-        self.repositorio.limpar()
+        try:
+            self.repositorio.limpar()
+        except sqlite3.Error as erro:
+            self._tratar_erro_banco("limpar o histórico", erro)
+            return
+
         self.aplicar_filtros()
 
     def _configurar_filtros(self) -> None:
-        self.dateFiltroInicio.setDate(QDate.currentDate())
+        self.dateFiltroInicio.setMinimumDate(QDate(2000, 1, 1))
+        self.dateFiltroInicio.setDate(self.dateFiltroInicio.minimumDate())
 
     def _configurar_tabela(self) -> None:
         self.tabelaEventos.setEditTriggers(
@@ -111,7 +131,14 @@ class HistoricoController(QWidget, Ui_Historico):
         self.botaoLimparHistorico.clicked.connect(self.limpar_historico)
 
     def _conectar_barramento(self) -> None:
-        barramento.evento_registrado.connect(self.registrar_evento)
+        barramento.evento_persistido.connect(
+            self.atualizar_apos_evento_persistido
+        )
+
+    def showEvent(self, evento) -> None:
+        """Recarrega os eventos persistidos sempre que a tela é exibida."""
+        self.aplicar_filtros()
+        super().showEvent(evento)
 
     def _tipo_selecionado(self) -> TipoEvento | None:
         texto = self.comboTipoEvento.currentText()
@@ -132,3 +159,14 @@ class HistoricoController(QWidget, Ui_Historico):
             TipoEvento.STATUS: (QColor("#ECEFF3"), QColor("#4B5563")),
         }
         return cores[tipo]
+
+    def _tratar_erro_banco(self, acao: str, erro: sqlite3.Error) -> None:
+        logger.error("Não foi possível %s: %s", acao, erro)
+        QMessageBox.critical(
+            self,
+            "Erro no banco de dados",
+            (
+                f"Não foi possível {acao}.\n\n"
+                "Tente novamente. Se o problema persistir, consulte os logs."
+            ),
+        )
