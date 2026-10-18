@@ -355,6 +355,23 @@ python main.py
 
 **Requisitos:** Python 3.10 ou superior. As dependências documentadas são exatamente as de `requirements.txt`: `PyQt6`, `pyqtgraph`, `numpy` e `pyserial`.
 
+### Testes e auditoria SQL
+
+No PowerShell, instale as dependências de desenvolvimento e execute os testes:
+
+```powershell
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+As consultas devem usar parâmetros `?`. Estes comandos devem terminar sem ocorrências:
+
+```powershell
+rg -n 'execute(many)?\(\s*f["'']' -g '*.py' .
+rg -n '(SELECT|INSERT|UPDATE|DELETE).*\.format\(' -g '*.py' .
+rg -n '(SELECT|INSERT|UPDATE|DELETE).*%\s*(\(|[A-Za-z_])' -g '*.py' .
+```
+
 ---
 
 ## Checklist da Entrega A1/1
