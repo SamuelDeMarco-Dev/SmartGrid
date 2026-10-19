@@ -178,6 +178,88 @@ Se qualquer passo falhar, nada é gravado: os dispositivos continuam como estava
 
 Erros de banco (`sqlite3.Error`) e de disco são capturados nos controllers, viram `QMessageBox.critical` e `[ERROR]` no log, e a interface não quebra com traceback. Nenhum `except: pass` é usado.
 
+### Configuração em JSON (`data/config.json`)
+
+Gerenciada por `ConfigManager` (`models/config_manager.py`). Guarda o que muda de uma máquina para outra e o interruptor de teste:
+
+| Chave | Padrão | Regra |
+|---|---|---|
+| `porta_com` | `"COM1"` | texto não vazio |
+| `baud_rate` | `115200` | 9600, 19200, 38400, 57600 ou 115200 |
+| `timeout_ms` | `1000` | inteiro de 100 a 10 000 (milissegundos) |
+| `simular_falha_corte` | `false` | verdadeiro ou falso |
+
+```json
+{
+  "porta_com": "COM3",
+  "baud_rate": 9600,
+  "timeout_ms": 2000,
+  "simular_falha_corte": false
+}
+```
+
+- **Arquivo inexistente:** `ConfigManager.carregar()` confere com `os.path.exists` e, se não existir, cria o arquivo com os padrões (`[INFO]` no log).
+- **JSON corrompido:** o app abre com os padrões e registra `[WARNING]`, sem sobrescrever o arquivo estragado.
+- **Campo inválido ou ausente:** só aquele campo volta ao padrão (`[WARNING]`), os demais são mantidos.
+- **Gravação atômica:** `ConfigManager.salvar()` grava em `config.json.tmp` e troca o arquivo com `os.replace`, para que uma interrupção nunca deixe o JSON pela metade.
+- **Tela serial:** abre com a última configuração e salva porta, baud rate e timeout a cada conexão bem-sucedida. Se a porta salva não existir na máquina, seleciona a primeira disponível (`[WARNING]`).
+
+Os limites de alerta ficam na tabela `regras_limites` do banco, que é a fonte oficial deles (valores iniciais em `database/schema.py`).
+
+### Log de auditoria (`logs/smartgrid.log`)
+
+Configurado por `configurar_log()` (`models/log_config.py`) com o módulo nativo `logging`, primeira instrução do `main.py`. O arquivo é criado automaticamente, gravado em UTF-8 e atualizado a cada registro. Os módulos obtêm o logger por `obter_logger()`.
+
+**Formato:** `AAAA-MM-DD HH:MM:SS [NÍVEL] descrição`
+
+| Nível | Quando |
+|---|---|
+| `INFO` | Operação normal concluída: banco inicializado, conexão serial, corte bem-sucedido, histórico limpo |
+| `WARNING` | Situação anormal tratada: limite violado, entrada inválida, configuração corrompida, modo de teste ativado |
+| `ERROR` | Falha ou exceção, inclusive rollback de transação |
+
+**Exemplo de uma sessão:**
+
+```text
+2026-10-19 08:00:01 [INFO] Conexão com SQLite estabelecida e esquema validado.
+2026-10-19 08:00:15 [INFO] Comunicação serial conectada: COM3 @ 9600 bps (timeout 1000 ms).
+2026-10-19 08:01:02 [WARNING] Limite de corrente violado: 28.5A (Limite configurado: 25.0A).
+2026-10-19 08:01:40 [WARNING] Entrada inválida em limites: limite_maximo='abc'
+2026-10-19 08:02:10 [WARNING] Modo de falha simulada ativado.
+2026-10-19 08:02:18 [ERROR] Falha na operação de corte emergencial. Rollback executado: Falha simulada entre corte e histórico.
+2026-10-19 08:02:30 [WARNING] Modo de falha simulada desativado.
+2026-10-19 08:02:41 [INFO] Corte de emergência acionado via software (RELAY_OFF) — disjuntor e relé em ABERTO.
+```
+
+### Modo de falha simulada (demonstração do rollback)
+
+Faz o corte de emergência falhar **de propósito** depois de atualizar os dispositivos e antes de gravar o evento no histórico. Serve para provar que a transação é desfeita e o banco volta ao estado anterior. Implementado em `models/modo_falha.py` (`ModoFalhaSimulada`).
+
+**Como ativar:**
+
+- durante a execução: **`Ctrl+Shift+F`** liga e desliga (vale só enquanto o app estiver aberto);
+- ao abrir o app: `"simular_falha_corte": true` em `data/config.json`.
+
+Com o modo ativo, a barra de status mostra o selo vermelho **MODO DE TESTE: falha simulada**, e cada troca fica no log (`[WARNING] Modo de falha simulada ativado.` / `desativado.`).
+
+**Conferindo o rollback no banco** (antes e depois do corte com falha, os resultados devem ser iguais):
+
+```powershell
+python -c "import sqlite3; c = sqlite3.connect('data/smartgrid.db'); print(c.execute('SELECT tag, status FROM dispositivos').fetchall()); print(c.execute('SELECT COUNT(*) FROM eventos').fetchone())"
+```
+
+Com o `sqlite3` instalado, o equivalente é `sqlite3 data/smartgrid.db "SELECT tag, status FROM dispositivos; SELECT COUNT(*) FROM eventos;"`.
+
+Desativando o modo (`Ctrl+Shift+F` de novo), o corte volta a funcionar: os dispositivos passam para `ABERTO` e o evento aparece no histórico.
+
+### Roteiro da arguição técnica
+
+Os três cenários exigidos na demonstração, executando o código clonado do GitHub. A divisão de quem faz cada passo está em [`docs/roteiro-demonstracao.md`](docs/roteiro-demonstracao.md).
+
+1. **Falha de validação:** no diálogo de limites, deixar um campo vazio, digitar letras e um valor negativo; na tela serial, informar um timeout inválido. Cada caso é bloqueado com `QMessageBox` e nada é gravado.
+2. **Falha transacional com rollback:** consultar o banco, ativar o modo de falha simulada (`Ctrl+Shift+F`), acionar o **Corte de Emergência**, ver a mensagem de erro e consultar o banco de novo: nada mudou. Desativar o modo e repetir o corte, agora com sucesso.
+3. **Auditoria em tempo real:** abrir `logs/smartgrid.log` e apontar os `[WARNING]` das validações, o `[ERROR] ... Rollback executado: ...` e o `[INFO]` do corte bem-sucedido.
+
 ---
 
 ## Entrega A1/1 — Requisitos Obrigatórios
@@ -476,33 +558,6 @@ rg -n 'execute(many)?\(\s*f["'']' -g '*.py' .
 rg -n '(SELECT|INSERT|UPDATE|DELETE).*\.format\(' -g '*.py' .
 rg -n '(SELECT|INSERT|UPDATE|DELETE).*%\s*(\(|[A-Za-z_])' -g '*.py' .
 ```
-
-### Modo de falha simulada (demonstração do rollback)
-
-Faz o corte de emergência falhar **de propósito** depois de atualizar os dispositivos e antes de gravar o evento no histórico. Serve para provar que a transação é desfeita e o banco volta ao estado anterior.
-
-**Como ativar:**
-
-- durante a execução: **`Ctrl+Shift+F`** liga e desliga (vale só enquanto o app estiver aberto);
-- ao abrir o app: `"simular_falha_corte": true` em `data/config.json`.
-
-Com o modo ativo, a barra de status mostra o selo vermelho **MODO DE TESTE: falha simulada**, e cada troca fica no log:
-
-```text
-2026-10-20 14:03:10 [WARNING] Modo de falha simulada ativado.
-2026-10-20 14:03:15 [ERROR] Falha na operação de corte emergencial. Rollback executado: Falha simulada entre corte e histórico.
-2026-10-20 14:03:30 [WARNING] Modo de falha simulada desativado.
-```
-
-**Conferindo o rollback no banco** (antes e depois do corte com falha, os resultados devem ser iguais):
-
-```powershell
-python -c "import sqlite3; c = sqlite3.connect('data/smartgrid.db'); print(c.execute('SELECT tag, status FROM dispositivos').fetchall()); print(c.execute('SELECT COUNT(*) FROM eventos').fetchone())"
-```
-
-Com o `sqlite3` instalado, o equivalente é `sqlite3 data/smartgrid.db "SELECT tag, status FROM dispositivos; SELECT COUNT(*) FROM eventos;"`.
-
-Desativando o modo (`Ctrl+Shift+F` de novo), o corte volta a funcionar: os dispositivos passam para `ABERTO` e o evento aparece no histórico.
 
 ---
 
