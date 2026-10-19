@@ -195,7 +195,7 @@ Gerenciada por `ConfigManager` (`models/config_manager.py`). Guarda o que muda d
 | Chave | Padrão | Regra |
 |---|---|---|
 | `porta_com` | `"COM1"` | texto não vazio |
-| `baud_rate` | `115200` | 9600, 19200, 38400, 57600 ou 115200 |
+| `baud_rate` | `9600` | 9600, 19200, 38400, 57600 ou 115200 |
 | `timeout_ms` | `1000` | inteiro de 100 a 10 000 (milissegundos) |
 | `limites_iniciais` | `corrente` 15.0, `tensao` 230.0, `potencia` 3500.0 | as três chaves, números maiores que zero (A, V e W) |
 | `simular_falha_corte` | `false` | verdadeiro ou falso |
@@ -398,6 +398,7 @@ SmartGrid/
 ├── requirements.txt
 ├── requirements-dev.txt           # requirements.txt + pytest
 ├── .gitignore
+├── .mailmap                       # Unifica as identidades dos integrantes no histórico
 ├── database/                      # Conexão e esquema SQLite
 │   ├── __init__.py
 │   ├── connection.py              # Database: init_db, conectar (timeout, pragmas), transacao
