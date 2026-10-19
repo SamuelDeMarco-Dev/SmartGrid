@@ -21,6 +21,7 @@ from models.aquisicao import ServicoAquisicao
 from models.config_manager import ConfigManager, Configuracao
 from models.gravador_eventos import GravadorEventos
 from models.log_config import configurar_log, obter_logger
+from models.modo_falha import ModoFalhaSimulada
 from models.repositorio_dispositivos import RepositorioDispositivos
 from models.repositorio_eventos import RepositorioEventos
 from models.repositorio_regras import RepositorioRegras
@@ -50,6 +51,19 @@ def _iniciar_banco() -> bool:
         )
         return False
     return True
+
+
+def _ligar_modo_falha(
+    janela: MainWindowController,
+    servico_corte: ServicoCorteEmergencial,
+    modo_falha: ModoFalhaSimulada,
+) -> None:
+    """Liga o modo de teste (Ctrl+Shift+F e selo) ao ponto de falha do corte."""
+    janela.usar_modo_falha(modo_falha)
+    servico_corte.simular_falha = modo_falha.ativo
+    modo_falha.alterado.connect(
+        lambda ativo: setattr(servico_corte, "simular_falha", ativo)
+    )
 
 
 def _montar_telas(
@@ -92,6 +106,9 @@ def main() -> int:
 
     janela = MainWindowController()
     _montar_telas(janela, servico_corte, repositorio_regras, config)
+    _ligar_modo_falha(
+        janela, servico_corte, ModoFalhaSimulada(config.simular_falha_corte, parent=app)
+    )
     janela.show()
 
     return app.exec()
