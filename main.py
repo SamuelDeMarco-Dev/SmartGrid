@@ -15,8 +15,11 @@ from controllers.main_window_controller import MainWindowController
 from controllers.serial_config_controller import SerialConfigController
 from database.connection import Database
 from models.aquisicao import ServicoAquisicao
-from models.repositorio_dispositivos_provisorio import RepositorioDispositivosProvisorio
+from models.config_manager import ConfigManager, Configuracao
+from models.log_config import configurar_log
+from models.repositorio_dispositivos import RepositorioDispositivos
 from models.repositorio_eventos import RepositorioEventos
+from models.repositorio_regras import RepositorioRegras
 from models.servico_corte import ServicoCorteEmergencial
 
 FOLHA_DE_ESTILO = Path(__file__).parent / "ui" / "estilo.qss"
@@ -27,24 +30,30 @@ def _aplicar_estilo(app: QApplication) -> None:
     app.setStyleSheet(FOLHA_DE_ESTILO.read_text(encoding="utf-8"))
 
 
-def _montar_telas(janela: MainWindowController) -> None:
+def _montar_telas(
+    janela: MainWindowController,
+    repositorio_regras: RepositorioRegras,
+    config: Configuracao,
+) -> None:
     """Encaixa as telas nas páginas reservadas pelo shell da janela principal."""
-    # TODO(#28): trocar pelo RepositorioDispositivos definitivo.
     servico_corte = ServicoCorteEmergencial(
-        RepositorioDispositivosProvisorio(), RepositorioEventos()
+        RepositorioDispositivos(), RepositorioEventos()
     )
-    janela.registrar_pagina("dashboard", DashboardController(servico_corte))
-    janela.registrar_pagina("serial", SerialConfigController())
+    janela.registrar_pagina(
+        "dashboard", DashboardController(servico_corte, repositorio_regras)
+    )
+    janela.registrar_pagina("serial", SerialConfigController(config))
     janela.registrar_pagina("historico", HistoricoController())
     janela.ir_para("dashboard")
 
 
 def main() -> int:
+    configurar_log()
+    config = ConfigManager.carregar()
     app = QApplication(sys.argv)
     _aplicar_estilo(app)
-
-    # TODO(#30): configurar_log(), ConfigManager e tratamento de falha do banco.
     Database.init_db()
+    repositorio_regras = RepositorioRegras()
 
     # Fonte da telemetria: publica leituras no barramento enquanto a porta
     # serial estiver aberta. Fica sob a guarda da QApplication para viver
@@ -52,7 +61,7 @@ def main() -> int:
     ServicoAquisicao(parent=app)
 
     janela = MainWindowController()
-    _montar_telas(janela)
+    _montar_telas(janela, repositorio_regras, config)
     janela.show()
 
     return app.exec()
