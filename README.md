@@ -78,6 +78,108 @@ O software supervisor recebe continuamente as amostras brutas dos sensores do mi
 
 ---
 
+## Entrega A1/2 — Persistência, Logs e Robustez
+
+Na A1/1 os dados viviam só na memória. Na A1/2:
+
+- o **histórico de eventos**, os **limites de segurança** e o **estado dos dispositivos** passam a ser gravados em banco relacional (**SQLite**);
+- a aplicação tolera erros de usuário e falhas de processo com **transações atômicas (ACID)** e **validação preventiva**;
+- os parâmetros de inicialização e comunicação ficam em arquivo estruturado (**JSON**);
+- toda anomalia, corte de carga ou erro de execução é registrado em **arquivo de log** para auditoria.
+
+### Persistência em SQLite
+
+O banco `data/smartgrid.db` é criado automaticamente por `Database.init_db()` (`database/connection.py`) na abertura do app. As tabelas usam `CREATE TABLE IF NOT EXISTS` e os dados iniciais só são inseridos com as tabelas vazias, então chamar `init_db()` de novo não duplica nada.
+
+**Modelo relacional:**
+
+```mermaid
+erDiagram
+    dispositivos ||--o{ eventos : "dispositivo_id (ON DELETE SET NULL)"
+
+    dispositivos {
+        INTEGER id PK "AUTOINCREMENT"
+        TEXT tag UK "NOT NULL - ex.: DISJ-01"
+        TEXT tipo "NOT NULL"
+        TEXT status "NOT NULL - CHECK IN (ABERTO, FECHADO)"
+        TEXT ultima_atualizacao "NOT NULL"
+    }
+    eventos {
+        INTEGER id PK "AUTOINCREMENT"
+        TEXT data_hora "NOT NULL"
+        TEXT tipo_evento "NOT NULL - CHECK IN (Comando, Alerta, Status)"
+        TEXT valor_medido
+        TEXT descricao "NOT NULL"
+        INTEGER dispositivo_id FK "REFERENCES dispositivos(id)"
+    }
+    regras_limites {
+        INTEGER id PK "AUTOINCREMENT"
+        TEXT nome UK "NOT NULL"
+        TEXT grandeza "NOT NULL - CHECK IN (CORRENTE, TENSAO, POTENCIA)"
+        REAL limite_maximo "NOT NULL - CHECK > 0"
+        INTEGER ativa "NOT NULL - CHECK IN (0, 1)"
+    }
+```
+
+| Tabela | Guarda | Dados iniciais |
+|---|---|---|
+| `dispositivos` | Estado do disjuntor principal e do relé de emergência | `DISJ-01` (Disjuntor principal) e `RELE-01` (Relé de emergência), ambos `FECHADO` |
+| `eventos` | Histórico exibido na `QTableWidget` | — |
+| `regras_limites` | Limites cadastrados no diálogo modal | Sobrecorrente 15 A (ativa), Sobretensão 230 V (ativa), Pico de Potência 3500 W (inativa) |
+
+O esquema e os dados iniciais ficam em `database/schema.py`.
+
+**Integridade:** `PRIMARY KEY`, `NOT NULL`, `UNIQUE`, restrições `CHECK` e chave estrangeira `eventos.dispositivo_id → dispositivos.id`. Toda conexão aberta por `Database.conectar()` executa `PRAGMA foreign_keys = ON;`, usa `timeout=5` segundos contra bloqueios de concorrência e devolve linhas nomeadas (`sqlite3.Row`).
+
+**Repositórios (CRUD)** — camada `models/`, sempre com SQL parametrizado (`?`):
+
+| Repositório | Operações |
+|---|---|
+| `RepositorioEventos` | `listar_todos()`, `filtrar(tipo, data_inicio)`, `adicionar(evento)`, `limpar()` |
+| `RepositorioRegras` | `obter_regras()`, `salvar_regras(lista)` (troca o conjunto inteiro numa única transação) |
+| `RepositorioDispositivos` | `listar()`, `obter_por_tag(tag)`, `atualizar_status(tag, status)` |
+
+Todo método que escreve aceita um parâmetro opcional `conn`: com ele, participa de uma transação maior em vez de abrir a própria. É isso que permite o corte emergencial gravar dispositivo e evento juntos.
+
+**Integração com a interface:**
+
+- A tabela do Histórico carrega os dados do banco no `showEvent`, via `RepositorioEventos.listar_todos()` (ou `filtrar` com filtros aplicados). Não existem mais dados estáticos.
+- Eventos gerados na tela (corte emergencial, alarme de limite, disparo do disjuntor, conexão serial) são publicados no barramento, gravados no SQLite pelo `GravadorEventos` e só então emitidos como `evento_persistido`, que atualiza a tabela. **A tabela nunca mostra um evento que não está no banco.**
+- O dashboard restaura o estado do disjuntor a partir de `dispositivos` ao abrir.
+
+### Transações atômicas e tratamento de erros
+
+`Database.transacao()` é o gerenciador de contexto (`with`) usado em toda escrita:
+
+```python
+with Database.transacao() as conn:   # BEGIN
+    ...                              # comandos com ?
+                                     # COMMIT ao sair sem erro
+# Qualquer exceção → ROLLBACK, log [ERROR] "Rollback executado: <motivo>" e a exceção é relançada.
+```
+
+Ele cumpre o papel do `with conn:` do `sqlite3`, com `BEGIN`, `COMMIT` e `ROLLBACK` explícitos.
+
+**Corte emergencial "tudo ou nada"** (`models/servico_corte.py`, `ServicoCorteEmergencial`), numa única transação:
+
+1. `UPDATE` de `DISJ-01` e `RELE-01` para `ABERTO` (ou `FECHADO`, no religamento);
+2. ponto de injeção de falha do [modo de falha simulada](#modo-de-falha-simulada-demonstração-do-rollback);
+3. `INSERT` do evento de comando no histórico.
+
+Se qualquer passo falhar, nada é gravado: os dispositivos continuam como estavam, nenhum evento entra no histórico, a interface não muda de estado e o operador recebe um `QMessageBox.critical`. Só depois do `COMMIT` o resto da aplicação é avisado pelo barramento.
+
+**Validação preventiva** (antes de tocar no banco), sempre com `QMessageBox.warning` e `[WARNING]` no log:
+
+| Tela | Entradas recusadas |
+|---|---|
+| Diálogo de Limites | nome vazio ou duplicado, limite vazio, **letras em campo numérico**, valor negativo ou zero |
+| Comunicação Serial | porta não selecionada, timeout vazio, com letras, negativo ou fora de 100 a 10 000 ms |
+| Histórico | data inicial de filtro inválida |
+
+Erros de banco (`sqlite3.Error`) e de disco são capturados nos controllers, viram `QMessageBox.critical` e `[ERROR]` no log, e a interface não quebra com traceback. Nenhum `except: pass` é usado.
+
+---
+
 ## Entrega A1/1 — Requisitos Obrigatórios
 
 ### 1. Dashboard Principal de Monitoramento (Smart Grid)
