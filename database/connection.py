@@ -26,8 +26,13 @@ class Database:
         return conn
 
     @classmethod
-    def init_db(cls) -> None:
-        """Cria o arquivo, as tabelas e os dados iniciais (somente se vazios)."""
+    def init_db(cls, limites_iniciais: dict[str, float] | None = None) -> None:
+        """Cria o arquivo, as tabelas e os dados iniciais (somente se vazios).
+
+        ``limites_iniciais`` (chaves ``corrente``, ``tensao`` e ``potencia``, do
+        ``config.json``) substitui o limite padrão de cada regra inicial. Só é
+        usado quando ``regras_limites`` está vazia: depois disso vale o banco.
+        """
         with cls.transacao() as conn:
             for ddl in TABELAS:
                 conn.execute(ddl)
@@ -41,10 +46,14 @@ class Database:
                 )
 
             if conn.execute("SELECT COUNT(*) FROM regras_limites").fetchone()[0] == 0:
+                limites = limites_iniciais or {}
                 conn.executemany(
                     "INSERT INTO regras_limites (nome, grandeza, limite_maximo, ativa) "
                     "VALUES (?, ?, ?, ?)",
-                    REGRAS_INICIAIS,
+                    [
+                        (nome, grandeza, float(limites.get(grandeza.lower(), limite)), ativa)
+                        for nome, grandeza, limite, ativa in REGRAS_INICIAIS
+                    ],
                 )
         logger.info("Conexão com SQLite estabelecida e esquema validado.")
 

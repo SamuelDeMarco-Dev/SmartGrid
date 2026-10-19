@@ -3,7 +3,8 @@
 Objetivo
 --------
 Guardar entre execuções as escolhas que dependem da máquina (porta, velocidade
-e timeout da comunicação serial) e o interruptor do modo de falha simulada.
+e timeout da comunicação serial), os limites iniciais de alerta e o interruptor
+do modo de falha simulada.
 O app sempre recebe uma configuração válida, mesmo que o arquivo não exista,
 esteja corrompido ou tenha valores inválidos.
 
@@ -15,12 +16,18 @@ Campo                    Padrão       Regra
 ``porta_com``            ``"COM1"``   texto não vazio
 ``baud_rate``            ``115200``   uma das velocidades de ``BAUD_RATES``
 ``timeout_ms``           ``1000``     inteiro de 100 a 10 000 (milissegundos)
+``limites_iniciais``     ver abaixo   ``corrente``, ``tensao`` e ``potencia``,
+                                      números maiores que zero
 ``simular_falha_corte``  ``false``    verdadeiro ou falso
 =======================  ===========  =========================================
 
-As regras são as mesmas da tela serial (``models/porta_serial.py``). Os limites
-de corrente, tensão e potência **não** ficam aqui: a fonte oficial deles é a
-tabela ``regras_limites`` do banco.
+As regras de porta, velocidade e timeout são as mesmas da tela serial
+(``models/porta_serial.py``).
+
+``limites_iniciais`` (padrão ``{"corrente": 15.0, "tensao": 230.0,
+"potencia": 3500.0}``, em A, V e W) semeia a tabela ``regras_limites`` quando o
+banco é criado. Depois disso a fonte oficial dos limites é o banco, editado
+pelo diálogo de limites; mudar o JSON só vale para um banco novo.
 
 Tolerância a falhas
 -------------------
@@ -45,10 +52,12 @@ Uso
 """
 
 import json
+import math
 import os
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
+from database.schema import REGRAS_INICIAIS
 from models.log_config import obter_logger
 from models.porta_serial import (
     BAUD_RATE_PADRAO,
@@ -69,10 +78,33 @@ def _inteiro(valor) -> bool:
     return isinstance(valor, int) and not isinstance(valor, bool)
 
 
+#: Limites de alerta usados quando o banco é criado (A, V e W), os mesmos
+#: das regras iniciais do esquema: {"corrente": 15.0, "tensao": 230.0, ...}.
+LIMITES_INICIAIS_PADRAO = {
+    grandeza.lower(): limite for _, grandeza, limite, _ in REGRAS_INICIAIS
+}
+
+
+def _limites_validos(valor) -> bool:
+    """Exige exatamente corrente, tensão e potência, todos números finitos > 0."""
+    return (
+        isinstance(valor, dict)
+        and set(valor) == set(LIMITES_INICIAIS_PADRAO)
+        and all(
+            isinstance(limite, (int, float))
+            and not isinstance(limite, bool)
+            and math.isfinite(limite)
+            and limite > 0
+            for limite in valor.values()
+        )
+    )
+
+
 _VALIDADORES = {
     "porta_com": lambda v: isinstance(v, str) and bool(v.strip()),
     "baud_rate": lambda v: _inteiro(v) and v in BAUD_RATES,
     "timeout_ms": lambda v: _inteiro(v) and TIMEOUT_MINIMO_MS <= v <= TIMEOUT_MAXIMO_MS,
+    "limites_iniciais": _limites_validos,
     "simular_falha_corte": lambda v: isinstance(v, bool),
 }
 
@@ -84,6 +116,9 @@ class Configuracao:
     porta_com: str = PORTAS_SIMULADAS[0]
     baud_rate: int = BAUD_RATE_PADRAO
     timeout_ms: int = TIMEOUT_PADRAO_MS
+    limites_iniciais: dict[str, float] = field(
+        default_factory=lambda: dict(LIMITES_INICIAIS_PADRAO)
+    )
     simular_falha_corte: bool = False
 
     def __post_init__(self) -> None:

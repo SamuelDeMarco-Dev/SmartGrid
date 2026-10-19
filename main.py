@@ -37,10 +37,10 @@ def _aplicar_estilo(app: QApplication) -> None:
     app.setStyleSheet(FOLHA_DE_ESTILO.read_text(encoding="utf-8"))
 
 
-def _iniciar_banco() -> bool:
+def _iniciar_banco(limites_iniciais: dict[str, float] | None = None) -> bool:
     """Cria/valida o SQLite. Em falha avisa o operador e devolve False."""
     try:
-        Database.init_db()
+        Database.init_db(limites_iniciais)
     except sqlite3.Error as erro:
         logger.error("Falha ao inicializar o banco de dados: %s.", erro)
         QMessageBox.critical(
@@ -89,7 +89,8 @@ def main() -> int:
     app = QApplication(sys.argv)
     _aplicar_estilo(app)
 
-    if not _iniciar_banco():
+    # Os limites do config.json semeiam as regras de alerta num banco novo.
+    if not _iniciar_banco(config.limites_iniciais):
         return 1
 
     repo_eventos = RepositorioEventos()
