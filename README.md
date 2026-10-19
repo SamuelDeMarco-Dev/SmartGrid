@@ -606,6 +606,7 @@ Os testes usam banco, configuração e log em pastas temporárias: não alteram 
 | `tests/test_config_manager.py` | Criação do `config.json`, JSON corrompido, campos inválidos e gravação atômica |
 | `tests/test_serial_config_controller.py` | Tela serial lendo e gravando a configuração, validação do timeout e log |
 | `tests/test_modo_falha.py` | Interruptor do modo de teste, atalho `Ctrl+Shift+F` e selo da barra de status |
+| `tests/test_falha_simulada_corte.py` | Modo de falha ligado ao corte: com o modo ativo o banco não muda (conferido por SQL); desligado, o corte grava |
 
 As consultas devem usar parâmetros `?`. Estes comandos devem terminar sem ocorrências:
 
