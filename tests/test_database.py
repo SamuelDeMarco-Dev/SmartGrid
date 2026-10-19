@@ -72,3 +72,34 @@ def test_init_db_e_idempotente(banco_temporario):
         ("RELE-01", "FECHADO"),
     ]
     assert quantidade_regras == 3
+
+
+def _limites_por_grandeza(caminho):
+    conexao = sqlite3.connect(caminho)
+    try:
+        return dict(conexao.execute("SELECT grandeza, limite_maximo FROM regras_limites"))
+    finally:
+        conexao.close()
+
+
+def test_init_db_semeia_regras_com_limites_do_config(tmp_path, monkeypatch):
+    caminho = tmp_path / "smartgrid.db"
+    monkeypatch.setattr(modulo_conexao, "CAMINHO_DB", caminho)
+
+    Database.init_db({"corrente": 25.0, "tensao": 220.0, "potencia": 5000})
+
+    assert _limites_por_grandeza(caminho) == {
+        "CORRENTE": 25.0, "TENSAO": 220.0, "POTENCIA": 5000.0,
+    }
+
+
+def test_init_db_sem_limites_usa_os_padroes_do_esquema(banco_temporario):
+    assert _limites_por_grandeza(banco_temporario) == {
+        "CORRENTE": 15.0, "TENSAO": 230.0, "POTENCIA": 3500.0,
+    }
+
+
+def test_limites_do_config_nao_sobrescrevem_regras_ja_salvas(banco_temporario):
+    Database.init_db({"corrente": 99.0, "tensao": 99.0, "potencia": 99.0})
+
+    assert _limites_por_grandeza(banco_temporario)["CORRENTE"] == 15.0

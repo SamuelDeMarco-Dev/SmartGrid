@@ -6,7 +6,7 @@ import logging
 import pytest
 
 import models.config_manager as modulo_config
-from models.config_manager import ConfigManager, Configuracao
+from models.config_manager import LIMITES_INICIAIS_PADRAO, ConfigManager, Configuracao
 
 
 @pytest.fixture
@@ -39,6 +39,7 @@ def test_sem_arquivo_cria_com_padroes_e_loga_info(caminho_config, log):
         "porta_com": "COM1",
         "baud_rate": 115200,
         "timeout_ms": 1000,
+        "limites_iniciais": {"corrente": 15.0, "tensao": 230.0, "potencia": 3500.0},
         "simular_falha_corte": False,
     }
     assert _niveis(log) == ["INFO"]
@@ -65,13 +66,18 @@ def test_campo_invalido_volta_ao_padrao_e_mantem_os_demais(caminho_config, log):
         "porta_com": "COM7",
         "baud_rate": 12345,
         "timeout_ms": 2500,
+        "limites_iniciais": {"corrente": 25.0, "tensao": 220.0, "potencia": 5000.0},
         "simular_falha_corte": True,
     }))
 
     config = ConfigManager.carregar()
 
     assert config == Configuracao(
-        porta_com="COM7", baud_rate=115200, timeout_ms=2500, simular_falha_corte=True
+        porta_com="COM7",
+        baud_rate=115200,
+        timeout_ms=2500,
+        limites_iniciais={"corrente": 25.0, "tensao": 220.0, "potencia": 5000.0},
+        simular_falha_corte=True,
     )
     assert _niveis(log) == ["WARNING"]
     assert "baud_rate" in log.records[0].getMessage()
@@ -88,8 +94,11 @@ def test_campo_ausente_usa_padrao_e_campo_desconhecido_e_ignorado(caminho_config
     config = ConfigManager.carregar()
 
     assert config.simular_falha_corte is False
+    assert config.limites_iniciais == LIMITES_INICIAIS_PADRAO
     assert (config.porta_com, config.baud_rate, config.timeout_ms) == ("COM3", 9600, 500)
-    assert _niveis(log) == ["WARNING"]
+    assert _niveis(log) == ["WARNING", "WARNING"]
+    avisos = " ".join(registro.getMessage() for registro in log.records)
+    assert "'limites_iniciais'" in avisos and "'simular_falha_corte'" in avisos
 
 
 @pytest.mark.parametrize(
@@ -109,6 +118,14 @@ def test_campo_ausente_usa_padrao_e_campo_desconhecido_e_ignorado(caminho_config
         ("timeout_ms", False),
         ("simular_falha_corte", 1),
         ("simular_falha_corte", "false"),
+        ("limites_iniciais", "25"),
+        ("limites_iniciais", [15.0, 230.0, 3500.0]),
+        ("limites_iniciais", {"corrente": 15.0, "tensao": 230.0}),
+        ("limites_iniciais", {"corrente": 15.0, "tensao": 230.0, "potencia": 3500.0, "x": 1}),
+        ("limites_iniciais", {"corrente": -1, "tensao": 230.0, "potencia": 3500.0}),
+        ("limites_iniciais", {"corrente": 0, "tensao": 230.0, "potencia": 3500.0}),
+        ("limites_iniciais", {"corrente": "15", "tensao": 230.0, "potencia": 3500.0}),
+        ("limites_iniciais", {"corrente": True, "tensao": 230.0, "potencia": 3500.0}),
     ],
 )
 def test_valor_invalido_e_recusado(caminho_config, log, campo, valor):
@@ -116,6 +133,7 @@ def test_valor_invalido_e_recusado(caminho_config, log, campo, valor):
         "porta_com": "COM3",
         "baud_rate": 9600,
         "timeout_ms": 500,
+        "limites_iniciais": {"corrente": 20, "tensao": 220.0, "potencia": 4000.0},
         "simular_falha_corte": True,
     }
     dados[campo] = valor
@@ -131,7 +149,11 @@ def test_valor_invalido_e_recusado(caminho_config, log, campo, valor):
 
 def test_salvar_e_carregar_devolve_o_mesmo(caminho_config):
     config = Configuracao(
-        porta_com="/dev/ttyUSB0", baud_rate=57600, timeout_ms=10_000, simular_falha_corte=True
+        porta_com="/dev/ttyUSB0",
+        baud_rate=57600,
+        timeout_ms=10_000,
+        limites_iniciais={"corrente": 32.5, "tensao": 240.0, "potencia": 7000.0},
+        simular_falha_corte=True,
     )
 
     ConfigManager.salvar(config)
