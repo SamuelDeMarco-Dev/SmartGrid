@@ -15,6 +15,7 @@ from controllers.main_window_controller import MainWindowController
 from controllers.serial_config_controller import SerialConfigController
 from database.connection import Database
 from models.aquisicao import ServicoAquisicao
+from models.config_manager import ConfigManager
 from models.log_config import configurar_log
 from models.repositorio_regras import RepositorioRegras
 
@@ -38,6 +39,7 @@ def _montar_telas(
 
 def main() -> int:
     configurar_log()
+    ConfigManager.carregar()
     app = QApplication(sys.argv)
     _aplicar_estilo(app)
     Database.init_db()
