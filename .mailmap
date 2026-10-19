@@ -1,0 +1,8 @@
+# Unifica as identidades de cada integrante no `git shortlog` e no `git log`.
+# Formato: Nome Oficial <e-mail oficial> [Nome usado no commit] <e-mail usado no commit>
+Samuel De Marco <samuel.demarco.dev@gmail.com>
+Davy Josias Scheuermann <davy.josias@gmail.com>
+Davy Josias Scheuermann <davy.josias@gmail.com> <93287491+Davyjosias01@users.noreply.github.com>
+Arthur De Marco Faggion <arthurfaggion7@gmail.com>
+Arthur De Marco Faggion <arthurfaggion7@gmail.com> <125932384+ArthurDeMarcoF@users.noreply.github.com>
+Lucas Zamoner Locatelli <lucaslocatellijba@gmail.com>
