@@ -12,14 +12,10 @@ from PyQt6.QtCore import QDate
 from PyQt6.QtWidgets import QMessageBox, QWidget
 
 from models.barramento import barramento
+from models.config_manager import Configuracao
 from models.evento import TipoEvento
 from models.log_config import obter_logger
-from models.porta_serial import (
-    BAUD_RATE_PADRAO,
-    BAUD_RATES,
-    ErroConexaoSerial,
-    PortaSerial,
-)
+from models.porta_serial import BAUD_RATES, ErroConexaoSerial, PortaSerial
 from ui.serial_config_ui import Ui_SerialConfig
 
 logger = obter_logger()
@@ -36,13 +32,16 @@ class SerialConfigController(QWidget, Ui_SerialConfig):
     _COR_CONECTADO = "#2E7D32"
     _COR_DESCONECTADO = "#C62828"
 
-    def __init__(self) -> None:
+    def __init__(self, config: Configuracao) -> None:
         super().__init__()
         self.setupUi(self)
         self.porta_serial = PortaSerial()
+        self._config = config
         self._preencher_baud_rates()
+        self.editTimeout.setText(str(config.timeout_ms))
         self._configurar_data_sessao()
         self.atualizar_portas()
+        self._selecionar_porta_salva()
         self._conectar_acoes()
         self._atualizar_estado_visual()
 
@@ -109,8 +108,21 @@ class SerialConfigController(QWidget, Ui_SerialConfig):
         for valor in BAUD_RATES:
             self.comboBaudRate.addItem(str(valor), valor)
         self.comboBaudRate.setCurrentIndex(
-            self.comboBaudRate.findData(BAUD_RATE_PADRAO)
+            self.comboBaudRate.findData(self._config.baud_rate)
         )
+
+    def _selecionar_porta_salva(self) -> None:
+        """Seleciona a porta do config.json ou, se ela sumiu, a primeira disponível."""
+        porta_salva = self._config.porta_com
+        indice = self.comboPortaSerial.findText(porta_salva)
+        if indice < 0:
+            # Índice 0 é o placeholder; listar_portas() nunca devolve lista vazia.
+            indice = 1
+            logger.warning(
+                "Porta salva %s não está disponível. Selecionada %s.",
+                porta_salva, self.comboPortaSerial.itemText(indice),
+            )
+        self.comboPortaSerial.setCurrentIndex(indice)
 
     def _configurar_data_sessao(self) -> None:
         hoje = QDate.currentDate()
