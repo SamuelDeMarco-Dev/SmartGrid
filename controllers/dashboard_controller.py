@@ -13,6 +13,8 @@ conexão não chegam amostras — os indicadores congelam e os comandos ficam
 indisponíveis, como aconteceria com o microcontrolador desligado.
 """
 
+import logging
+import sqlite3
 from datetime import datetime
 
 import pyqtgraph as pg
@@ -26,8 +28,11 @@ from models.evento import TipoEvento
 from models.leitura import Leitura
 from models.regra_alerta import Grandeza, RegraAlerta
 from models.repositorio_regras import RepositorioRegras
+from models.servico_corte import FalhaCorteEmergencial, ServicoCorteEmergencial
 from models.simulador_telemetria import gerar_historico_24h
 from ui.dashboard_ui import Ui_Dashboard
+
+logger = logging.getLogger("smartgrid")
 
 
 class DashboardController(QWidget, Ui_Dashboard):
@@ -44,12 +49,17 @@ class DashboardController(QWidget, Ui_Dashboard):
     _COR_CRITICA = "#C62828"
     _COR_INATIVA = "#6B7280"
 
-    def __init__(self, repositorio_regras: RepositorioRegras) -> None:
+    def __init__(
+        self,
+        servico_corte: ServicoCorteEmergencial,
+        repositorio_regras: RepositorioRegras,
+    ) -> None:
         super().__init__()
         self.setupUi(self)
 
+        self._servico_corte = servico_corte
         self._repositorio_regras = repositorio_regras
-        self.estado_disjuntor = EstadoDisjuntor.FECHADO
+        self.estado_disjuntor = self._restaurar_estado_disjuntor()
         self.leitura_atual = Leitura(
             instante=datetime.now(), tensao=0.0, corrente=0.0
         )
@@ -203,16 +213,22 @@ class DashboardController(QWidget, Ui_Dashboard):
         violacoes = self._violacoes(leitura)
 
         if violacoes:
-            self._pintar_situacao(
-                self._COR_CRITICA, f"LIMITE ULTRAPASSADO — {violacoes[0]}"
-            )
-            # O evento sai apenas na transição normal → violado: com uma
-            # amostra por segundo, registrar sempre inundaria o histórico.
+            texto = violacoes[0][0]
+            self._pintar_situacao(self._COR_CRITICA, f"LIMITE ULTRAPASSADO — {texto}")
+            # Log e evento saem apenas na transição normal → violado: com uma
+            # amostra por segundo, registrar sempre inundaria histórico e log.
             if not self._em_violacao:
                 self._em_violacao = True
+                for _, grandeza, valor, limite in violacoes:
+                    logger.warning(
+                        "Limite de %s violado: %.1f%s (Limite configurado: %.1f%s).",
+                        grandeza.rotulo.lower(), valor, grandeza.unidade,
+                        limite, grandeza.unidade,
+                    )
+                # Persistido pelo GravadorEventos, que escuta este pedido.
                 barramento.registrar_evento(
                     TipoEvento.ALERTA,
-                    f"Limite de alerta ultrapassado: {violacoes[0]}",
+                    f"Limite de alerta ultrapassado: {texto}",
                     leitura.resumo(),
                 )
             return
@@ -225,19 +241,28 @@ class DashboardController(QWidget, Ui_Dashboard):
 
         self._pintar_situacao(self._COR_NORMAL, "Consumo dentro do limite")
 
-    def _violacoes(self, leitura: Leitura) -> list[str]:
-        """Descrições legíveis de tudo que está fora do limite nesta amostra."""
+    def _violacoes(
+        self, leitura: Leitura
+    ) -> list[tuple[str, Grandeza, float, float]]:
+        """Tudo que está fora do limite nesta amostra.
+
+        Cada item: (descrição legível, grandeza, valor medido, limite).
+        """
         fora = []
 
         if leitura.potencia > self._setpoint():
-            fora.append(f"potência em {leitura.potencia:.0f} W")
+            fora.append((
+                f"potência em {leitura.potencia:.0f} W",
+                Grandeza.POTENCIA, leitura.potencia, self._setpoint(),
+            ))
 
         for regra in self._regras:
             valor = self._valor_da_grandeza(leitura, regra.grandeza)
             if regra.violada_por(valor):
-                fora.append(
-                    f"{regra.nome} — {valor:.2f} {regra.grandeza.unidade}"
-                )
+                fora.append((
+                    f"{regra.nome} — {valor:.2f} {regra.grandeza.unidade}",
+                    regra.grandeza, valor, regra.limite_maximo,
+                ))
 
         return fora
 
@@ -330,6 +355,14 @@ class DashboardController(QWidget, Ui_Dashboard):
     # ------------------------------------------------------------------
     # Estado do disjuntor e atuação
     # ------------------------------------------------------------------
+    def _restaurar_estado_disjuntor(self) -> EstadoDisjuntor:
+        """Abre a tela no estado gravado em ``dispositivos``, não num padrão fixo."""
+        try:
+            return self._servico_corte.estado_atual()
+        except (sqlite3.Error, LookupError, KeyError) as erro:
+            logger.error("Não foi possível restaurar o estado do disjuntor: %s", erro)
+            return EstadoDisjuntor.FECHADO
+
     def alternar_carga(self) -> None:
         """Corte de emergência (ou religamento), sempre sob confirmação."""
         if self.estado_disjuntor.energizado:
@@ -339,14 +372,12 @@ class DashboardController(QWidget, Ui_Dashboard):
                 "O comando RELAY_OFF será enviado e a instalação "
                 "ficará desenergizada."
             )
-            descricao = "Corte de emergência acionado via software (RELAY_OFF)"
         else:
             titulo = "Religar carga"
             pergunta = (
                 "Confirmar o religamento da carga?\n\n"
                 "A instalação voltará a ser energizada."
             )
-            descricao = "Religamento da carga acionado via software (RELAY_ON)"
 
         resposta = QMessageBox.question(
             self,
@@ -359,10 +390,20 @@ class DashboardController(QWidget, Ui_Dashboard):
         if resposta != QMessageBox.StandardButton.Yes:
             return
 
-        barramento.registrar_evento(
-            TipoEvento.COMANDO, descricao, self.leitura_atual.resumo()
-        )
-        barramento.estado_disjuntor_alterado.emit(self.estado_disjuntor.alternado())
+        # O serviço grava dispositivos + evento numa só transação e, após o
+        # COMMIT, emite `estado_disjuntor_alterado` — é ele que atualiza o badge.
+        try:
+            self._servico_corte.executar(
+                self.estado_disjuntor.alternado(), self.leitura_atual.resumo()
+            )
+        except FalhaCorteEmergencial as erro:
+            QMessageBox.critical(
+                self,
+                titulo,
+                "A operação não foi concluída e foi desfeita (rollback).\n"
+                "O estado do disjuntor permanece inalterado.\n\n"
+                f"Motivo: {erro}",
+            )
 
     def simular_disparo_hardware(self) -> None:
         """Reproduz um disparo espontâneo vindo do hardware.
@@ -388,11 +429,19 @@ class DashboardController(QWidget, Ui_Dashboard):
             self._tratar_disparo_espontaneo()
 
     def _tratar_disparo_espontaneo(self) -> None:
-        barramento.registrar_evento(
-            TipoEvento.ALERTA,
-            "Disjuntor abriu espontaneamente — proteção atuada no hardware",
-            self.leitura_atual.resumo(),
-        )
+        # O disjuntor já abriu fisicamente: a tela mostra ABERTO mesmo que a
+        # gravação falhe, mas o operador é avisado de que o banco ficou para trás.
+        try:
+            self._servico_corte.registrar_disparo_espontaneo(self.leitura_atual.resumo())
+        except (sqlite3.Error, LookupError) as erro:
+            logger.error("Falha ao registrar o disparo espontâneo no banco: %s", erro)
+            QMessageBox.critical(
+                self,
+                "Falha de registro",
+                "O disjuntor abriu, mas não foi possível gravar o disparo no banco.\n\n"
+                f"Motivo: {erro}",
+            )
+
         QMessageBox.warning(
             self,
             "Proteção atuada",
