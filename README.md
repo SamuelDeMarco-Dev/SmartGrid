@@ -11,6 +11,13 @@ Projeto da disciplina **Desenvolvimento de Aplicações Computacionais** — Uno
 - [Equipe](#equipe)
 - [Visão Geral](#visão-geral)
 - [Escopo das Entregas](#escopo-das-entregas)
+- [Entrega A1/2 — Persistência, Logs e Robustez](#entrega-a12--persistência-logs-e-robustez)
+  - [Persistência em SQLite](#persistência-em-sqlite)
+  - [Transações atômicas e tratamento de erros](#transações-atômicas-e-tratamento-de-erros)
+  - [Configuração em JSON](#configuração-em-json-dataconfigjson)
+  - [Log de auditoria](#log-de-auditoria-logssmartgridlog)
+  - [Modo de falha simulada](#modo-de-falha-simulada-demonstração-do-rollback)
+  - [Roteiro da arguição técnica](#roteiro-da-arguição-técnica)
 - [Entrega A1/1 — Requisitos Obrigatórios](#entrega-a11--requisitos-obrigatórios)
 - [Entrega Final (Dezembro) — Requisitos Funcionais](#entrega-final-dezembro--requisitos-funcionais)
   - [1. Processamento e Apresentação de Telemetria](#1-processamento-e-apresentação-de-telemetria-hardware--desktop)
@@ -21,10 +28,13 @@ Projeto da disciplina **Desenvolvimento de Aplicações Computacionais** — Uno
 - [Organização do Trabalho em Equipe](#organização-do-trabalho-em-equipe)
 - [Tecnologias](#tecnologias)
 - [Como Executar](#como-executar)
+- [Checklist da Entrega A1/2](#checklist-da-entrega-a12)
 - [Checklist da Entrega A1/1](#checklist-da-entrega-a11)
-- [Forma de Entrega e Apresentação](#forma-de-entrega-e-apresentação-a11)
+- [Forma de Entrega e Apresentação (A1/2)](#forma-de-entrega-e-apresentação-a12)
+- [Forma de Entrega e Apresentação (A1/1)](#forma-de-entrega-e-apresentação-a11)
 - [Regras Obrigatórias do Git](#regras-obrigatórias-do-git)
-- [Critérios Avaliativos](#critérios-avaliativos)
+- [Critérios Avaliativos (A1/2)](#critérios-avaliativos-a12)
+- [Critérios Avaliativos (A1/1)](#critérios-avaliativos-a11)
 - [Opção de Tema Livre](#-opção-de-tema-livre-prototipagem-de-microcontroladores)
 
 ---
@@ -482,13 +492,24 @@ pyuic6 -o ui/nome_da_tela_ui.py ui/nome_da_tela.ui
 
 O trabalho está dividido em **milestones e issues no GitHub**, com propriedade exclusiva de arquivos: cada tela é dona do seu `.ui`, do seu controller e dos seus models específicos. Assim ninguém edita o arquivo de ninguém e não há conflito de merge.
 
+**A1/2 — Persistência, Logs e Robustez:**
+
+| Milestone | Conteúdo |
+|---|---|
+| **M0 — Fundação de Persistência** | Camada `database/`, esquema SQLite, transações, módulo de log e `.gitignore` |
+| **M1 — Persistência por Módulo** | Eventos, regras, dispositivos, `config.json` e corte transacional, em paralelo |
+| **M2 — Integração & Robustez** | Fiação final, modo de falha simulada, testes de integridade e rollback |
+| **M3 — Documentação & Entrega** | README, roteiro de demonstração, integração final e auditoria de commits |
+
+**A1/1 — Telas (concluída):**
+
 | Milestone | Conteúdo |
 |---|---|
 | **M0 — Fundação MVC & Contratos** ✅ | Estrutura de pastas, `main.py`, shell da janela principal e entidades compartilhadas em `/models` |
-| **M1 — Entrega A1/1: Telas** | As 4 telas obrigatórias, desenvolvidas em paralelo — uma por integrante |
-| **M2 — Integração & Entrega** | Fiação das telas no shell, padronização visual, checklist de entrega |
+| **M1 — Entrega A1/1: Telas** ✅ | As 4 telas obrigatórias, desenvolvidas em paralelo — uma por integrante |
+| **M2 — Integração & Entrega** ✅ | Fiação das telas no shell, padronização visual, checklist de entrega |
 
-Os contratos de `/models` entregues no M0 estão **congelados**: qualquer campo novo passa por comentário na issue correspondente e PR específico.
+Os contratos de `/models` estão **congelados**: qualquer campo novo passa por comentário na issue correspondente e PR específico. O mesmo vale para o esquema do banco em `database/schema.py`.
 
 ### Fluxo de trabalho
 
@@ -515,10 +536,14 @@ git pull --rebase origin main          # antes de abrir o PR
 | **pyqtgraph** | Gráfico de tendência de consumo |
 | **numpy** | Apoio ao processamento e manipulação de dados numéricos |
 | **pyserial** | Comunicação serial com o microcontrolador *(Unidade 4)* |
+| **sqlite3** *(nativo)* | Banco relacional local `data/smartgrid.db` |
+| **json** *(nativo)* | Arquivo de configuração `data/config.json` |
+| **logging** *(nativo)* | Log de auditoria `logs/smartgrid.log` |
+| **pytest** *(desenvolvimento)* | Testes automatizados |
 
 ### Componentes Qt Utilizados
 
-`QLCDNumber` · `QLabel` · `QComboBox` · `QSpinBox` / `QDoubleSpinBox` · `QPushButton` · `QTableWidget` · `QDateEdit` · `QDialog` (modal) · `QMessageBox` (`question` / `warning`)
+`QLCDNumber` · `QLabel` · `QComboBox` · `QLineEdit` · `QDoubleSpinBox` · `QPushButton` · `QTableWidget` · `QDateEdit` · `QDialog` (modal) · `QMessageBox` (`question` / `warning` / `critical`) · `QStatusBar` · `QShortcut`
 
 ---
 
@@ -572,6 +597,16 @@ python -m pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
+Os testes usam banco, configuração e log em pastas temporárias: não alteram o `data/` nem o `logs/` reais. As telas são testadas sem abrir janela.
+
+| Arquivo | O que cobre |
+|---|---|
+| `tests/test_database.py` | Restrições `CHECK`, chave estrangeira e `init_db()` sem duplicar dados |
+| `tests/test_transacoes.py` | Rollback de dispositivos e eventos, gravação conjunta e limpeza atômica do histórico |
+| `tests/test_config_manager.py` | Criação do `config.json`, JSON corrompido, campos inválidos e gravação atômica |
+| `tests/test_serial_config_controller.py` | Tela serial lendo e gravando a configuração, validação do timeout e log |
+| `tests/test_modo_falha.py` | Interruptor do modo de teste, atalho `Ctrl+Shift+F` e selo da barra de status |
+
 As consultas devem usar parâmetros `?`. Estes comandos devem terminar sem ocorrências:
 
 ```powershell
@@ -579,6 +614,27 @@ rg -n 'execute(many)?\(\s*f["'']' -g '*.py' .
 rg -n '(SELECT|INSERT|UPDATE|DELETE).*\.format\(' -g '*.py' .
 rg -n '(SELECT|INSERT|UPDATE|DELETE).*%\s*(\(|[A-Za-z_])' -g '*.py' .
 ```
+
+---
+
+## Checklist da Entrega A1/2
+
+| Exigência | Onde é atendida |
+|---|---|
+| `smartgrid.db` criado automaticamente por `Database.init_db()` | `database/connection.py` |
+| Tabelas de dispositivos, histórico de eventos e regras/limites | `database/schema.py` |
+| `PRIMARY KEY`, `NOT NULL`, `CHECK(status IN ('ABERTO','FECHADO'))` e `PRAGMA foreign_keys = ON;` | `database/schema.py`, `Database.conectar()` |
+| CRUD nos repositórios, com SQL parametrizado (`?`) | `models/repositorio_*.py` |
+| `QTableWidget` carregada do banco via `listar_todos()` | `HistoricoController.showEvent` |
+| Novos eventos gravados no SQLite e refletidos na tabela | `GravadorEventos` → `evento_persistido` |
+| Validação preventiva com `QMessageBox` (vazio, letras, negativo) | Diálogo de Limites e tela Serial |
+| Corte emergencial "tudo ou nada" (disjuntor + evento) | `ServicoCorteEmergencial` com `Database.transacao()` |
+| `timeout` contra bloqueio e nenhum `except: pass` | `Database.conectar()` e controllers |
+| `config.json` lido e salvo, criado com padrões via `os.path.exists` | `models/config_manager.py`, tela Serial |
+| `smartgrid.log` com timestamp e `[INFO]` / `[WARNING]` / `[ERROR]` | `models/log_config.py` |
+| `.gitignore` com `__pycache__/`, `.venv/`, `.vscode/`, `*.db-wal`, `*.db-journal` | `.gitignore` |
+| Estrutura `database/`, `models/`, `controllers/`, `ui/`, `logs/`, `data/`, `main.py` | [Arquitetura](#padrão-mvc--separação-estrita-de-pastas) |
+| Demonstração: validação, rollback e auditoria do log | [Roteiro da arguição](#roteiro-da-arguição-técnica) |
 
 ---
 
@@ -591,6 +647,11 @@ rg -n '(SELECT|INSERT|UPDATE|DELETE).*%\s*(\(|[A-Za-z_])' -g '*.py' .
 - [x] Critério 5 — README, Git e organização do trabalho
 
 ---
+
+## Forma de Entrega e Apresentação (A1/2)
+
+- **Envio do Projeto:** repositório atualizado com o projeto na data de entrega.
+- **Apresentação em Sala:** no dia **19/10/2026**, no laboratório, as equipes fazem uma **demonstração prática executando o código clonado do próprio GitHub**, simulando ativamente os cenários de falha (ver [Roteiro da arguição](#roteiro-da-arguição-técnica)).
 
 ## Forma de Entrega e Apresentação (A1/1)
 
@@ -606,10 +667,23 @@ rg -n '(SELECT|INSERT|UPDATE|DELETE).*%\s*(\(|[A-Za-z_])' -g '*.py' .
 - **Evolução do Código:** os commits devem demonstrar a **evolução progressiva** do projeto ao longo do período de desenvolvimento. **Enviar todo o código em um único commit no dia da entrega não será aceito.**
 - **Avaliação Individual:** a participação de cada membro é **auditada pelo histórico do Git**. O aluno que **NÃO** possuir commits registrados em seu usuário do GitHub receberá **nota ZERO** na entrega.
 - **Padrão de Mensagens:** manter um padrão coerente nas mensagens de commit.
+- **Continuidade (A1/2):** o desenvolvimento da A1/2 continua no mesmo repositório da A1/1.
 
 ---
 
-## Critérios Avaliativos
+## Critérios Avaliativos (A1/2)
+
+| # | Categoria | Critério Detalhado | Nota Máx. |
+|---|---|---|---|
+| **1** | **Persistência de Dados & SQLite** | • Modelagem e criação automática do banco `smartgrid.db` com integridade relacional (`PRIMARY KEY`, `NOT NULL`, restrições `CHECK` e ativação de `FOREIGN KEY`)<br>• Implementação completa das rotinas de CRUD nos Repositórios (atuadores/disjuntor, histórico de eventos e limites de alerta)<br>• Integração direta do banco com a interface: carregamento dinâmico na inicialização e atualização em tempo real do `QTableWidget` | **2,5 pts** |
+| **2** | **Robustez, Exceções & Transações ACID** | • Validações preventivas de entrada no `QDialog` (campos numéricos, vazios ou negativos) com feedback via `QMessageBox`<br>• Controle transacional seguro na rotina de "Corte Emergencial": integridade "tudo ou nada" (atualização do disjuntor + registro de evento)<br>• Prevenção de bloqueios de concorrência com `timeout` configurado e tratamento refinado de exceções sem `except: pass` | **2,5 pts** |
+| **3** | **Arquivos Estruturados (JSON) & Logs** | • Leitura e escrita íntegra de parâmetros de inicialização e comunicação serial no `config.json`, tratando arquivo inexistente (`os.path.exists`)<br>• Geração contínua do `smartgrid.log` registrando eventos operacionais, erros e desarmes com timestamp e severidade (`INFO`, `WARNING`, `ERROR`) | **1,5 pt** |
+| **4** | **Governança, Versionamento & Auditoria Git** | • Repositório ativo com continuidade do histórico da A1/1 e mensagens descritivas<br>• `.gitignore` na raiz impedindo o envio de `__pycache__/`, `.venv/` e arquivos temporários de banco<br>• Distribuição equitativa de commits (aluno sem commits nesta etapa recebe nota zero) | **1,5 pt** |
+| **5** | **Qualidade do Código & Padrão MVC** | • Arquitetura em camadas (`/ui`, `/controllers`, `/models`, `/database`, `main.py`)<br>• Isolamento completo dos arquivos do Qt Designer (nenhuma regra de negócio ou SQL em `/ui`)<br>• Boas práticas de POO, código limpo e SQL parametrizado com placeholders (`?`) | **1,0 pt** |
+| **6** | **Arguição Técnica & Simulação de Falhas** | • Demonstração prática executando o código clonado do GitHub<br>• Simulação ativa de falhas: erros de entrada no formulário e interrupção no corte de emergência comprovando o `ROLLBACK`<br>• Auditoria ao vivo dos registros no `smartgrid.log` | **1,0 pt** |
+| | **NOTA TOTAL** | | **10,0 pts** |
+
+## Critérios Avaliativos (A1/1)
 
 | # | Categoria | Critério Detalhado | Nota Máx. |
 |---|---|---|---|
