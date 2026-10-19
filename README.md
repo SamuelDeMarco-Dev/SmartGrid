@@ -275,19 +275,19 @@ Os três cenários exigidos na demonstração, executando o código clonado do G
 ### 2. Painel de Configuração da Comunicação Serial
 
 - Seleção de **Porta COM** (`QComboBox`);
-- **Baud Rate** (9600, 115200);
-- **Timeout**;
+- **Baud Rate** (9600, 115200, além de 19200, 38400 e 57600);
+- **Timeout** em milissegundos;
 - Botões de **Conectar / Desconectar**.
 - Atualização do status visual da conexão e publicação do estado no barramento.
 
-> Nesta etapa A1/1, a tela valida e simula a abertura da porta para integração visual. A comunicação real com o microcontrolador fica para a entrega final.
+> Nesta etapa A1/1, a tela valida e simula a abertura da porta para integração visual. A comunicação real com o microcontrolador fica para a entrega final. Na A1/2 a tela passou a ler e gravar a configuração em [`data/config.json`](#configuração-em-json-dataconfigjson).
 
 ### 3. Janela de Configuração de Limites / Parâmetros (`QDialog` Modal)
 
 - Formulário secundário para cadastro de **regras de alerta** (ex.: limite máximo de corrente, limite máximo de tensão);
 - **No mínimo duas regras**;
 - Envio e resgate correto de parâmetros para a tela principal;
-- Validações com `QMessageBox` e persistência em memória durante a execução.
+- Validações com `QMessageBox` e persistência em memória durante a execução (na A1/2, persistência na tabela `regras_limites` do SQLite).
 
 ### 4. Histórico de Eventos e Registros (`QTableWidget`)
 
@@ -297,7 +297,7 @@ Os três cenários exigidos na demonstração, executando o código clonado do G
   - trocas de estado do disjuntor.
 - Filtros por tipo de evento e data inicial;
 - Limpeza do histórico com confirmação;
-- Eventos recebidos em tempo real pelo barramento.
+- Eventos recebidos em tempo real pelo barramento (na A1/2, carregados do SQLite e atualizados a cada evento gravado).
 
 ---
 
@@ -379,27 +379,44 @@ Toda a atividade do sistema é centralizada na `QTableWidget` de registros:
 
 ```
 SmartGrid/
-├── main.py                        # Inicializa QApplication, estilo, aquisição e telas
+├── main.py                        # Ponto de entrada: log → config → banco → telas
 ├── requirements.txt
+├── requirements-dev.txt           # requirements.txt + pytest
+├── .gitignore
+├── database/                      # Conexão e esquema SQLite
+│   ├── __init__.py
+│   ├── connection.py              # Database: init_db, conectar (timeout, pragmas), transacao
+│   └── schema.py                  # DDL das 3 tabelas e dados iniciais
 ├── controllers/                   # Lógica das janelas e eventos (Signals & Slots)
 │   ├── __init__.py
 │   ├── dashboard_controller.py
 │   ├── historico_controller.py
 │   ├── limites_dialog_controller.py
-│   ├── main_window_controller.py
+│   ├── main_window_controller.py  # Shell, barra de status e atalho do modo de teste
 │   └── serial_config_controller.py
-├── models/                        # Regras de negócio, entidades e dados
+├── models/                        # Regras de negócio, entidades e repositórios
 │   ├── __init__.py
 │   ├── aquisicao.py               # Serviço que publica telemetria simulada
 │   ├── barramento.py              # Canal de sinais compartilhado entre telas
+│   ├── config_manager.py          # Leitura e escrita do data/config.json
 │   ├── estado_disjuntor.py
 │   ├── evento.py
+│   ├── gravador_eventos.py        # Grava no SQLite os eventos publicados no barramento
 │   ├── leitura.py
+│   ├── log_config.py              # Configuração do logs/smartgrid.log
+│   ├── modo_falha.py              # Interruptor do modo de falha simulada
 │   ├── porta_serial.py            # Validação e simulação da porta serial
 │   ├── regra_alerta.py
+│   ├── repositorio_dispositivos.py
 │   ├── repositorio_eventos.py
 │   ├── repositorio_regras.py
+│   ├── servico_corte.py           # Corte emergencial transacional
 │   └── simulador_telemetria.py
+├── tests/                         # Testes automatizados (pytest)
+├── docs/
+│   └── roteiro-demonstracao.md
+├── data/                          # smartgrid.db e config.json (gerados, fora do Git)
+├── logs/                          # smartgrid.log (gerado, fora do Git)
 ├── ui/                            # Arquivos .ui e versões geradas pelo pyuic6
 │   ├── __init__.py
 │   ├── dashboard.ui
@@ -422,8 +439,9 @@ SmartGrid/
 - Os arquivos `_ui.py` em `/ui` permanecem **completamente isolados** — são descrições de layout geradas pelo `pyuic6`;
 - Os arquivos `.ui` são mantidos como fonte editável do Qt Designer, e a folha `ui/estilo.qss` centraliza a aparência global;
 - Toda lógica de interação, validação visual e conexão de sinais vive em `/controllers`;
-- As regras de negócio, entidades, repositórios em memória, simulação de telemetria e serial ficam em `/models`;
-- `main.py` permanece como ponto de entrada e composição: cria a aplicação, aplica o estilo, inicia o serviço de aquisição, monta a janela principal e registra as telas no shell.
+- As regras de negócio, entidades, repositórios SQLite (sempre com SQL parametrizado `?`), configuração, log, simulação de telemetria e serial ficam em `/models`;
+- A conexão, o esquema e as transações do banco ficam em `/database`. Nenhum SQL é escrito em `/ui` ou `/controllers`;
+- `main.py` permanece como ponto de entrada e composição, nesta ordem: configura o log, carrega o `config.json`, inicializa o banco, cria o gravador de eventos e o serviço de corte, monta a janela principal e registra as telas no shell.
 
 ### Comunicação entre as Telas — Barramento de Eventos
 
@@ -432,8 +450,9 @@ Nenhum controller importa outro controller. As telas conversam por sinais public
 | Sinal | Emitido por | Consumido por |
 |---|---|---|
 | `leitura_recebida(Leitura)` | Serviço de aquisição | Dashboard (indicadores e gráfico) |
-| `evento_registrado(Evento)` | Qualquer tela | Histórico de Eventos |
-| `estado_disjuntor_alterado(EstadoDisjuntor)` | Dashboard / aquisição | Dashboard (badge e comandos) |
+| `evento_registrado(Evento)` | Qualquer tela (pedido de gravação) | `GravadorEventos` |
+| `evento_persistido(Evento)` | `GravadorEventos` e serviço de corte, **após o COMMIT** | Histórico de Eventos |
+| `estado_disjuntor_alterado(EstadoDisjuntor)` | Serviço de corte / aquisição | Dashboard (badge e comandos) |
 | `regras_alteradas(list[RegraAlerta])` | Diálogo de Limites | Dashboard (proteção por setpoint) |
 | `status_conexao_alterado(bool, str)` | Painel Serial | Janela principal, Dashboard e serviço de aquisição |
 
@@ -441,9 +460,11 @@ Nenhum controller importa outro controller. As telas conversam por sinais public
 from models.barramento import barramento
 from models.evento import TipoEvento
 
-barramento.evento_registrado.connect(self._adicionar_linha)
+barramento.evento_persistido.connect(self._adicionar_linha)
 barramento.registrar_evento(TipoEvento.COMANDO, "Corte de emergência acionado", "12.50 A / 2750 W")
 ```
+
+Um evento só chega ao Histórico depois de gravado: a tela publica `evento_registrado`, o `GravadorEventos` grava no SQLite e emite `evento_persistido`. Se a gravação falhar, o erro vai para o log e o evento não aparece na tabela.
 
 A janela principal expõe `registrar_pagina(nome, widget)` e `ir_para(nome)`. O `main.py` usa esses métodos para encaixar `DashboardController`, `SerialConfigController` e `HistoricoController` no `QStackedWidget` do shell.
 
