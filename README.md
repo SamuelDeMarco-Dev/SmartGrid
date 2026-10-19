@@ -190,13 +190,14 @@ Erros de banco (`sqlite3.Error`) e de disco são capturados nos controllers, vir
 
 ### Configuração em JSON (`data/config.json`)
 
-Gerenciada por `ConfigManager` (`models/config_manager.py`). Guarda o que muda de uma máquina para outra e o interruptor de teste:
+Gerenciada por `ConfigManager` (`models/config_manager.py`). Guarda o que muda de uma máquina para outra, os limites iniciais de alerta e o interruptor de teste:
 
 | Chave | Padrão | Regra |
 |---|---|---|
 | `porta_com` | `"COM1"` | texto não vazio |
 | `baud_rate` | `115200` | 9600, 19200, 38400, 57600 ou 115200 |
 | `timeout_ms` | `1000` | inteiro de 100 a 10 000 (milissegundos) |
+| `limites_iniciais` | `corrente` 15.0, `tensao` 230.0, `potencia` 3500.0 | as três chaves, números maiores que zero (A, V e W) |
 | `simular_falha_corte` | `false` | verdadeiro ou falso |
 
 ```json
@@ -204,6 +205,11 @@ Gerenciada por `ConfigManager` (`models/config_manager.py`). Guarda o que muda d
   "porta_com": "COM3",
   "baud_rate": 9600,
   "timeout_ms": 2000,
+  "limites_iniciais": {
+    "corrente": 25.0,
+    "tensao": 220.0,
+    "potencia": 5000.0
+  },
   "simular_falha_corte": false
 }
 ```
@@ -213,8 +219,7 @@ Gerenciada por `ConfigManager` (`models/config_manager.py`). Guarda o que muda d
 - **Campo inválido ou ausente:** só aquele campo volta ao padrão (`[WARNING]`), os demais são mantidos.
 - **Gravação atômica:** `ConfigManager.salvar()` grava em `config.json.tmp` e troca o arquivo com `os.replace`, para que uma interrupção nunca deixe o JSON pela metade.
 - **Tela serial:** abre com a última configuração e salva porta, baud rate e timeout a cada conexão bem-sucedida. Se a porta salva não existir na máquina, seleciona a primeira disponível (`[WARNING]`).
-
-Os limites de alerta ficam na tabela `regras_limites` do banco, que é a fonte oficial deles (valores iniciais em `database/schema.py`).
+- **Limites iniciais de alerta:** na criação do banco, `Database.init_db(config.limites_iniciais)` usa esses valores para semear a tabela `regras_limites`. Daí em diante a fonte oficial dos limites é o banco, editado pelo diálogo de limites. Para aplicar novos limites iniciais, edite o JSON e apague `data/smartgrid.db`.
 
 ### Log de auditoria (`logs/smartgrid.log`)
 
@@ -631,7 +636,7 @@ rg -n '(SELECT|INSERT|UPDATE|DELETE).*%\s*(\(|[A-Za-z_])' -g '*.py' .
 | Validação preventiva com `QMessageBox` (vazio, letras, negativo) | Diálogo de Limites e tela Serial |
 | Corte emergencial "tudo ou nada" (disjuntor + evento) | `ServicoCorteEmergencial` com `Database.transacao()` |
 | `timeout` contra bloqueio e nenhum `except: pass` | `Database.conectar()` e controllers |
-| `config.json` lido e salvo, criado com padrões via `os.path.exists` | `models/config_manager.py`, tela Serial |
+| `config.json` lido e salvo (porta COM, baud rate, timeout e limites iniciais de alerta), criado com padrões via `os.path.exists` | `models/config_manager.py`, tela Serial, `Database.init_db` |
 | `smartgrid.log` com timestamp e `[INFO]` / `[WARNING]` / `[ERROR]` | `models/log_config.py` |
 | `.gitignore` com `__pycache__/`, `.venv/`, `.vscode/`, `*.db-wal`, `*.db-journal` | `.gitignore` |
 | Estrutura `database/`, `models/`, `controllers/`, `ui/`, `logs/`, `data/`, `main.py` | [Arquitetura](#padrão-mvc--separação-estrita-de-pastas) |
