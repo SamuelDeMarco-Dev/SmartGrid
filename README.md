@@ -31,12 +31,12 @@ Projeto da disciplina **Desenvolvimento de Aplicações Computacionais** — Uno
 
 ## Equipe
 
-| Integrante | Usuário GitHub | Função |
-|---|---|---|
-| Samuel De Marco | [@SamuelDeMarco-Dev](https://github.com/SamuelDeMarco-Dev) | Arquitetura MVC, janela principal e Dashboard de Monitoramento |
-| Davy Josias Scheuermann | [@Davyjosias01](https://github.com/Davyjosias01) | Painel de Configuração da Comunicação Serial |
-| Lucas Zamoner Locatelli | [@lucaszlocatelli](https://github.com/lucaszlocatelli) | Diálogo Modal de Limites e Parâmetros |
-| Arthur De Marco Faggion | [@ArthurDeMarcoF](https://github.com/ArthurDeMarcoF) | Histórico de Eventos e Registros |
+| Integrante | Usuário GitHub | A1/1 | A1/2 |
+|---|---|---|---|
+| Samuel De Marco | [@SamuelDeMarco-Dev](https://github.com/SamuelDeMarco-Dev) | Arquitetura MVC, janela principal e Dashboard de Monitoramento | Camada `database/`, esquema e transações, corte emergencial atômico, `main.py` de inicialização e integração final |
+| Davy Josias Scheuermann | [@Davyjosias01](https://github.com/Davyjosias01) | Painel de Configuração da Comunicação Serial | Log de auditoria, `config.json`, tela serial persistente, modo de falha simulada e README |
+| Lucas Zamoner Locatelli | [@lucaszlocatelli](https://github.com/lucaszlocatelli) | Diálogo Modal de Limites e Parâmetros | Regras de limite no SQLite, validações do diálogo, repositório de dispositivos e auditoria de SQL |
+| Arthur De Marco Faggion | [@ArthurDeMarcoF](https://github.com/ArthurDeMarcoF) | Histórico de Eventos e Registros | Eventos no SQLite, filtros e limpeza transacional do histórico, testes de rollback e roteiro de demonstração |
 
 > ⚠️ Todos os integrantes devem possuir commits registrados em seu próprio usuário do GitHub. Ver [Regras Obrigatórias do Git](#regras-obrigatórias-do-git).
 
@@ -51,7 +51,9 @@ O software supervisor recebe continuamente as amostras brutas dos sensores do mi
 1. Processa e apresenta a telemetria elétrica (tensão, corrente e potência);
 2. Monitora o estado binário do disjuntor/chave de proteção;
 3. Permite atuação sobre a carga (relé) e parametrização de limites de alerta;
-4. Centraliza todo o histórico de eventos em uma tabela de auditoria.
+4. Centraliza todo o histórico de eventos em uma tabela de auditoria;
+5. Persiste eventos, limites e estado dos dispositivos em **SQLite**, com transações atômicas;
+6. Guarda a configuração da comunicação em **`data/config.json`** e registra a operação em **`logs/smartgrid.log`**.
 
 ```
 ┌──────────────────┐        Serial (Unidade 4)        ┌──────────────────────┐
@@ -69,6 +71,7 @@ O software supervisor recebe continuamente as amostras brutas dos sensores do mi
 | Entrega | Data | Escopo |
 |---|---|---|
 | **A1/1** | 17/08/2026 | Arquitetura MVC, navegação entre janelas, layout responsivo e interface gráfica completos. **Sem conexão física com o hardware.** |
+| **A1/2** | 19/10/2026 | **Persistência, Logs e Robustez:** SQLite com integridade relacional, transações atômicas (ACID), configuração em JSON, log de auditoria e tratamento preventivo de erros. |
 | **Final** | Dezembro | Integração serial real, processamento de telemetria, atuação sobre o relé, proteção por setpoint e auditoria completa. |
 
 > Na entrega A1/1 a aplicação **não precisa estar fisicamente conectada ao hardware** — a integração serial ocorrerá na Unidade 4. No entanto, toda a arquitetura de código em camadas (MVC), navegação entre janelas, layout responsivo e interface gráfica devem estar prontos.
