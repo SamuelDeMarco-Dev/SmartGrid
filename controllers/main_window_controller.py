@@ -4,14 +4,18 @@ Responsabilidades desta classe:
     - montar a janela principal a partir do layout compilado em ui/main_window_ui.py;
     - conectar os Signals & Slots da navegação;
     - oferecer à equipe os métodos `registrar_pagina` e `ir_para`, usados na
-      integração das telas do M1.
+      integração das telas do M1;
+    - expor o modo de falha simulada (atalho Ctrl+Shift+F e selo na barra de
+      status) por meio de `usar_modo_falha`.
 
 Nenhuma regra de negócio de telemetria, serial, limites ou histórico vive aqui.
 """
 
-from PyQt6.QtWidgets import QMainWindow, QWidget
+from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtWidgets import QLabel, QMainWindow, QWidget
 
 from models.barramento import barramento
+from models.modo_falha import ModoFalhaSimulada
 from ui.main_window_ui import Ui_MainWindow
 
 
@@ -26,9 +30,12 @@ class MainWindowController(QMainWindow, Ui_MainWindow):
         "historico": 2,
     }
 
+    ATALHO_MODO_FALHA = "Ctrl+Shift+F"
+
     def __init__(self) -> None:
         super().__init__()
         self.setupUi(self)
+        self._criar_selo_modo_teste()
         self._conectar_navegacao()
         self._conectar_barramento()
         self.atualizar_status_conexao(False, "Desconectado")
@@ -65,9 +72,27 @@ class MainWindowController(QMainWindow, Ui_MainWindow):
         prefixo = "Conectado" if conectado else "Desconectado"
         self.statusbar.showMessage(f"{prefixo} — {descricao}")
 
+    def usar_modo_falha(self, modo: ModoFalhaSimulada) -> None:
+        """Liga o atalho Ctrl+Shift+F e o selo da barra de status ao modo de teste."""
+        self._atalho_modo_falha = QShortcut(QKeySequence(self.ATALHO_MODO_FALHA), self)
+        self._atalho_modo_falha.activated.connect(modo.alternar)
+        modo.alterado.connect(self.seloModoTeste.setVisible)
+        self.seloModoTeste.setVisible(modo.ativo)
+
     # ------------------------------------------------------------------
     # Internos
     # ------------------------------------------------------------------
+    def _criar_selo_modo_teste(self) -> None:
+        # Widget permanente: as mensagens da conexão serial (showMessage) não o
+        # apagam, então o selo fica visível enquanto o modo estiver ativo.
+        self.seloModoTeste = QLabel("MODO DE TESTE: falha simulada")
+        self.seloModoTeste.setStyleSheet(
+            "background-color: #C62828; color: #FFFFFF; font-weight: bold;"
+            "padding: 2px 8px; border-radius: 3px;"
+        )
+        self.seloModoTeste.setVisible(False)
+        self.statusbar.addPermanentWidget(self.seloModoTeste)
+
     def _conectar_navegacao(self) -> None:
         self.botaoDashboard.clicked.connect(lambda: self.ir_para("dashboard"))
         self.botaoSerial.clicked.connect(lambda: self.ir_para("serial"))

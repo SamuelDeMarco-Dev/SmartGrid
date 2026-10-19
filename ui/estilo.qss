@@ -108,7 +108,8 @@ QLineEdit:focus {
 QComboBox:disabled,
 QSpinBox:disabled,
 QDoubleSpinBox:disabled,
-QDateEdit:disabled {
+QDateEdit:disabled,
+QLineEdit:disabled {
     background-color: #EDEFF2;
     color: #9AA5B1;
 }

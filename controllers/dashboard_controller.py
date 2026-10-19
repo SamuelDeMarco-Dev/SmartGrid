@@ -27,7 +27,7 @@ from models.estado_disjuntor import EstadoDisjuntor
 from models.evento import TipoEvento
 from models.leitura import Leitura
 from models.regra_alerta import Grandeza, RegraAlerta
-from models.repositorio_regras import repositorio_regras_compartilhado
+from models.repositorio_regras import RepositorioRegras
 from models.servico_corte import FalhaCorteEmergencial, ServicoCorteEmergencial
 from models.simulador_telemetria import gerar_historico_24h
 from ui.dashboard_ui import Ui_Dashboard
@@ -49,16 +49,21 @@ class DashboardController(QWidget, Ui_Dashboard):
     _COR_CRITICA = "#C62828"
     _COR_INATIVA = "#6B7280"
 
-    def __init__(self, servico_corte: ServicoCorteEmergencial) -> None:
+    def __init__(
+        self,
+        servico_corte: ServicoCorteEmergencial,
+        repositorio_regras: RepositorioRegras,
+    ) -> None:
         super().__init__()
         self.setupUi(self)
 
         self._servico_corte = servico_corte
+        self._repositorio_regras = repositorio_regras
         self.estado_disjuntor = self._restaurar_estado_disjuntor()
         self.leitura_atual = Leitura(
             instante=datetime.now(), tensao=0.0, corrente=0.0
         )
-        self._regras: list[RegraAlerta] = repositorio_regras_compartilhado.obter_regras()
+        self._regras: list[RegraAlerta] = self._repositorio_regras.obter_regras()
         self._em_violacao = False
         self._conectado = False
         #: Marca que a próxima mudança de estado veio do hardware, e não de um
@@ -325,7 +330,7 @@ class DashboardController(QWidget, Ui_Dashboard):
 
     def abrir_dialogo_limites(self) -> None:
         """Abre o QDialog modal e resgata os parâmetros ao fechar."""
-        dialogo = LimitesDialogController(parent=self)
+        dialogo = LimitesDialogController(self._repositorio_regras, parent=self)
 
         if dialogo.exec() == LimitesDialogController.DialogCode.Accepted:
             # O diálogo também publica `regras_alteradas`; o resgate pelo
