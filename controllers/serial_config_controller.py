@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import QMessageBox, QWidget
 
 from models.barramento import barramento
 from models.evento import TipoEvento
+from models.log_config import obter_logger
 from models.porta_serial import (
     BAUD_RATE_PADRAO,
     BAUD_RATES,
@@ -20,6 +21,8 @@ from models.porta_serial import (
     PortaSerial,
 )
 from ui.serial_config_ui import Ui_SerialConfig
+
+logger = obter_logger()
 
 
 class SerialConfigController(QWidget, Ui_SerialConfig):
@@ -63,9 +66,13 @@ class SerialConfigController(QWidget, Ui_SerialConfig):
             parametros = self.porta_serial.conectar(
                 porta=self._porta_selecionada(),
                 baud_rate=self._baud_rate_selecionado(),
-                timeout_ms=self.spinTimeout.value(),
+                timeout_ms=self._timeout_digitado(),
             )
         except ErroConexaoSerial as erro:
+            logger.warning(
+                "Entrada inválida em serial: porta=%r, timeout=%r. %s",
+                self._porta_selecionada(), self.editTimeout.text(), erro,
+            )
             self._avisar(str(erro))
             return
 
@@ -131,6 +138,21 @@ class SerialConfigController(QWidget, Ui_SerialConfig):
     def _baud_rate_selecionado(self) -> int:
         return self.comboBaudRate.currentData()
 
+    def _timeout_digitado(self) -> int:
+        """Converte o texto do campo; a faixa válida é conferida por PortaSerial."""
+        texto = self.editTimeout.text().strip()
+        if not texto:
+            raise ErroConexaoSerial("Informe o timeout em milissegundos.")
+        try:
+            timeout_ms = int(texto)
+        except ValueError:
+            raise ErroConexaoSerial(
+                "O timeout deve ser um número inteiro de milissegundos."
+            ) from None
+        if timeout_ms < 0:
+            raise ErroConexaoSerial("O timeout não pode ser negativo.")
+        return timeout_ms
+
     # ------------------------------------------------------------------
     # Reflexo do estado na interface
     # ------------------------------------------------------------------
@@ -145,7 +167,7 @@ class SerialConfigController(QWidget, Ui_SerialConfig):
         for campo in (
             self.comboPortaSerial,
             self.comboBaudRate,
-            self.spinTimeout,
+            self.editTimeout,
             self.botaoAtualizarPortas,
         ):
             campo.setEnabled(not conectado)
