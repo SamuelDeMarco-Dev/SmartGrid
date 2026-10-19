@@ -2,25 +2,16 @@
 
 import json
 import logging
-import os
 
 import pytest
+from PyQt6.QtWidgets import QMessageBox
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
-
-import models.config_manager as modulo_config  # noqa: E402
-from controllers.serial_config_controller import SerialConfigController  # noqa: E402
-from models.config_manager import ConfigManager, Configuracao  # noqa: E402
-from models.porta_serial import PortaSerial  # noqa: E402
+import models.config_manager as modulo_config
+from controllers.serial_config_controller import SerialConfigController
+from models.config_manager import ConfigManager, Configuracao
+from models.porta_serial import PortaSerial
 
 PORTAS_DA_MAQUINA = ["COM1", "COM3", "COM7"]
-
-
-@pytest.fixture(scope="module")
-def app():
-    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture
