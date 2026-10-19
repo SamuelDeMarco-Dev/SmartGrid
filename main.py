@@ -15,7 +15,7 @@ from controllers.main_window_controller import MainWindowController
 from controllers.serial_config_controller import SerialConfigController
 from database.connection import Database
 from models.aquisicao import ServicoAquisicao
-from models.config_manager import ConfigManager
+from models.config_manager import ConfigManager, Configuracao
 from models.log_config import configurar_log
 from models.repositorio_regras import RepositorioRegras
 
@@ -28,18 +28,20 @@ def _aplicar_estilo(app: QApplication) -> None:
 
 
 def _montar_telas(
-    janela: MainWindowController, repositorio_regras: RepositorioRegras
+    janela: MainWindowController,
+    repositorio_regras: RepositorioRegras,
+    config: Configuracao,
 ) -> None:
     """Encaixa as telas nas páginas reservadas pelo shell da janela principal."""
     janela.registrar_pagina("dashboard", DashboardController(repositorio_regras))
-    janela.registrar_pagina("serial", SerialConfigController())
+    janela.registrar_pagina("serial", SerialConfigController(config))
     janela.registrar_pagina("historico", HistoricoController())
     janela.ir_para("dashboard")
 
 
 def main() -> int:
     configurar_log()
-    ConfigManager.carregar()
+    config = ConfigManager.carregar()
     app = QApplication(sys.argv)
     _aplicar_estilo(app)
     Database.init_db()
@@ -51,7 +53,7 @@ def main() -> int:
     ServicoAquisicao(parent=app)
 
     janela = MainWindowController()
-    _montar_telas(janela, repositorio_regras)
+    _montar_telas(janela, repositorio_regras, config)
     janela.show()
 
     return app.exec()
