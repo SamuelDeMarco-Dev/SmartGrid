@@ -17,7 +17,10 @@ from database.connection import Database
 from models.aquisicao import ServicoAquisicao
 from models.config_manager import ConfigManager, Configuracao
 from models.log_config import configurar_log
+from models.repositorio_dispositivos import RepositorioDispositivos
+from models.repositorio_eventos import RepositorioEventos
 from models.repositorio_regras import RepositorioRegras
+from models.servico_corte import ServicoCorteEmergencial
 
 FOLHA_DE_ESTILO = Path(__file__).parent / "ui" / "estilo.qss"
 
@@ -33,7 +36,12 @@ def _montar_telas(
     config: Configuracao,
 ) -> None:
     """Encaixa as telas nas páginas reservadas pelo shell da janela principal."""
-    janela.registrar_pagina("dashboard", DashboardController(repositorio_regras))
+    servico_corte = ServicoCorteEmergencial(
+        RepositorioDispositivos(), RepositorioEventos()
+    )
+    janela.registrar_pagina(
+        "dashboard", DashboardController(servico_corte, repositorio_regras)
+    )
     janela.registrar_pagina("serial", SerialConfigController(config))
     janela.registrar_pagina("historico", HistoricoController())
     janela.ir_para("dashboard")

@@ -13,6 +13,8 @@ conexão não chegam amostras — os indicadores congelam e os comandos ficam
 indisponíveis, como aconteceria com o microcontrolador desligado.
 """
 
+import logging
+import sqlite3
 from datetime import datetime
 
 import pyqtgraph as pg
@@ -26,8 +28,11 @@ from models.evento import TipoEvento
 from models.leitura import Leitura
 from models.regra_alerta import Grandeza, RegraAlerta
 from models.repositorio_regras import RepositorioRegras
+from models.servico_corte import FalhaCorteEmergencial, ServicoCorteEmergencial
 from models.simulador_telemetria import gerar_historico_24h
 from ui.dashboard_ui import Ui_Dashboard
+
+logger = logging.getLogger("smartgrid")
 
 
 class DashboardController(QWidget, Ui_Dashboard):
@@ -44,12 +49,17 @@ class DashboardController(QWidget, Ui_Dashboard):
     _COR_CRITICA = "#C62828"
     _COR_INATIVA = "#6B7280"
 
-    def __init__(self, repositorio_regras: RepositorioRegras) -> None:
+    def __init__(
+        self,
+        servico_corte: ServicoCorteEmergencial,
+        repositorio_regras: RepositorioRegras,
+    ) -> None:
         super().__init__()
         self.setupUi(self)
 
+        self._servico_corte = servico_corte
         self._repositorio_regras = repositorio_regras
-        self.estado_disjuntor = EstadoDisjuntor.FECHADO
+        self.estado_disjuntor = self._restaurar_estado_disjuntor()
         self.leitura_atual = Leitura(
             instante=datetime.now(), tensao=0.0, corrente=0.0
         )
@@ -330,6 +340,14 @@ class DashboardController(QWidget, Ui_Dashboard):
     # ------------------------------------------------------------------
     # Estado do disjuntor e atuação
     # ------------------------------------------------------------------
+    def _restaurar_estado_disjuntor(self) -> EstadoDisjuntor:
+        """Abre a tela no estado gravado em ``dispositivos``, não num padrão fixo."""
+        try:
+            return self._servico_corte.estado_atual()
+        except (sqlite3.Error, LookupError, KeyError) as erro:
+            logger.error("Não foi possível restaurar o estado do disjuntor: %s", erro)
+            return EstadoDisjuntor.FECHADO
+
     def alternar_carga(self) -> None:
         """Corte de emergência (ou religamento), sempre sob confirmação."""
         if self.estado_disjuntor.energizado:
@@ -339,14 +357,12 @@ class DashboardController(QWidget, Ui_Dashboard):
                 "O comando RELAY_OFF será enviado e a instalação "
                 "ficará desenergizada."
             )
-            descricao = "Corte de emergência acionado via software (RELAY_OFF)"
         else:
             titulo = "Religar carga"
             pergunta = (
                 "Confirmar o religamento da carga?\n\n"
                 "A instalação voltará a ser energizada."
             )
-            descricao = "Religamento da carga acionado via software (RELAY_ON)"
 
         resposta = QMessageBox.question(
             self,
@@ -359,10 +375,20 @@ class DashboardController(QWidget, Ui_Dashboard):
         if resposta != QMessageBox.StandardButton.Yes:
             return
 
-        barramento.registrar_evento(
-            TipoEvento.COMANDO, descricao, self.leitura_atual.resumo()
-        )
-        barramento.estado_disjuntor_alterado.emit(self.estado_disjuntor.alternado())
+        # O serviço grava dispositivos + evento numa só transação e, após o
+        # COMMIT, emite `estado_disjuntor_alterado` — é ele que atualiza o badge.
+        try:
+            self._servico_corte.executar(
+                self.estado_disjuntor.alternado(), self.leitura_atual.resumo()
+            )
+        except FalhaCorteEmergencial as erro:
+            QMessageBox.critical(
+                self,
+                titulo,
+                "A operação não foi concluída e foi desfeita (rollback).\n"
+                "O estado do disjuntor permanece inalterado.\n\n"
+                f"Motivo: {erro}",
+            )
 
     def simular_disparo_hardware(self) -> None:
         """Reproduz um disparo espontâneo vindo do hardware.
