@@ -213,16 +213,22 @@ class DashboardController(QWidget, Ui_Dashboard):
         violacoes = self._violacoes(leitura)
 
         if violacoes:
-            self._pintar_situacao(
-                self._COR_CRITICA, f"LIMITE ULTRAPASSADO — {violacoes[0]}"
-            )
-            # O evento sai apenas na transição normal → violado: com uma
-            # amostra por segundo, registrar sempre inundaria o histórico.
+            texto = violacoes[0][0]
+            self._pintar_situacao(self._COR_CRITICA, f"LIMITE ULTRAPASSADO — {texto}")
+            # Log e evento saem apenas na transição normal → violado: com uma
+            # amostra por segundo, registrar sempre inundaria histórico e log.
             if not self._em_violacao:
                 self._em_violacao = True
+                for _, grandeza, valor, limite in violacoes:
+                    logger.warning(
+                        "Limite de %s violado: %.1f%s (Limite configurado: %.1f%s).",
+                        grandeza.rotulo.lower(), valor, grandeza.unidade,
+                        limite, grandeza.unidade,
+                    )
+                # Persistido pelo GravadorEventos, que escuta este pedido.
                 barramento.registrar_evento(
                     TipoEvento.ALERTA,
-                    f"Limite de alerta ultrapassado: {violacoes[0]}",
+                    f"Limite de alerta ultrapassado: {texto}",
                     leitura.resumo(),
                 )
             return
@@ -235,19 +241,28 @@ class DashboardController(QWidget, Ui_Dashboard):
 
         self._pintar_situacao(self._COR_NORMAL, "Consumo dentro do limite")
 
-    def _violacoes(self, leitura: Leitura) -> list[str]:
-        """Descrições legíveis de tudo que está fora do limite nesta amostra."""
+    def _violacoes(
+        self, leitura: Leitura
+    ) -> list[tuple[str, Grandeza, float, float]]:
+        """Tudo que está fora do limite nesta amostra.
+
+        Cada item: (descrição legível, grandeza, valor medido, limite).
+        """
         fora = []
 
         if leitura.potencia > self._setpoint():
-            fora.append(f"potência em {leitura.potencia:.0f} W")
+            fora.append((
+                f"potência em {leitura.potencia:.0f} W",
+                Grandeza.POTENCIA, leitura.potencia, self._setpoint(),
+            ))
 
         for regra in self._regras:
             valor = self._valor_da_grandeza(leitura, regra.grandeza)
             if regra.violada_por(valor):
-                fora.append(
-                    f"{regra.nome} — {valor:.2f} {regra.grandeza.unidade}"
-                )
+                fora.append((
+                    f"{regra.nome} — {valor:.2f} {regra.grandeza.unidade}",
+                    regra.grandeza, valor, regra.limite_maximo,
+                ))
 
         return fora
 
@@ -414,11 +429,19 @@ class DashboardController(QWidget, Ui_Dashboard):
             self._tratar_disparo_espontaneo()
 
     def _tratar_disparo_espontaneo(self) -> None:
-        barramento.registrar_evento(
-            TipoEvento.ALERTA,
-            "Disjuntor abriu espontaneamente — proteção atuada no hardware",
-            self.leitura_atual.resumo(),
-        )
+        # O disjuntor já abriu fisicamente: a tela mostra ABERTO mesmo que a
+        # gravação falhe, mas o operador é avisado de que o banco ficou para trás.
+        try:
+            self._servico_corte.registrar_disparo_espontaneo(self.leitura_atual.resumo())
+        except (sqlite3.Error, LookupError) as erro:
+            logger.error("Falha ao registrar o disparo espontâneo no banco: %s", erro)
+            QMessageBox.critical(
+                self,
+                "Falha de registro",
+                "O disjuntor abriu, mas não foi possível gravar o disparo no banco.\n\n"
+                f"Motivo: {erro}",
+            )
+
         QMessageBox.warning(
             self,
             "Proteção atuada",

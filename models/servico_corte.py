@@ -80,6 +80,30 @@ class ServicoCorteEmergencial:
         barramento.estado_disjuntor_alterado.emit(destino)
         return evento
 
+    def registrar_disparo_espontaneo(self, valor_medido: str = "") -> Evento:
+        """Grava a abertura do disjuntor pelo hardware e o alerta correspondente.
+
+        Diferente do corte, aqui o estado físico JÁ mudou: o serviço apenas
+        alinha o banco à realidade, atomicamente. Não emite
+        ``estado_disjuntor_alterado`` (quem detectou o disparo já o fez).
+        Levanta ``sqlite3.Error``/``LookupError`` se a gravação falhar.
+        """
+        evento = Evento.agora(
+            TipoEvento.ALERTA,
+            "Disjuntor abriu espontaneamente — proteção atuada no hardware",
+            valor_medido,
+        )
+
+        with Database.transacao() as conn:
+            self._repo_dispositivos.atualizar_status(
+                self.TAG_DISJUNTOR, EstadoDisjuntor.ABERTO.name, conn
+            )
+            self._repo_eventos.adicionar(evento, conn)
+
+        logger.warning("Disparo espontâneo do disjuntor %s registrado.", self.TAG_DISJUNTOR)
+        barramento.evento_persistido.emit(evento)
+        return evento
+
     def _ponto_de_falha(self) -> None:
         if self.simular_falha:
             raise RuntimeError("Falha simulada entre corte e histórico")
