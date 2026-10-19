@@ -16,6 +16,7 @@ from controllers.serial_config_controller import SerialConfigController
 from database.connection import Database
 from models.aquisicao import ServicoAquisicao
 from models.log_config import configurar_log
+from models.repositorio_regras import RepositorioRegras
 
 FOLHA_DE_ESTILO = Path(__file__).parent / "ui" / "estilo.qss"
 
