@@ -5,17 +5,29 @@ publica o resultado no barramento — a janela principal usa
 ``status_conexao_alterado`` para alimentar a ``QStatusBar`` e a tela de
 Histórico recebe os eventos de conexão e desconexão.
 
+A tela abre com a última configuração do ``data/config.json`` e grava porta,
+baud rate e timeout a cada conexão bem-sucedida. Entradas inválidas geram
+``[WARNING]`` no log; conectar e desconectar geram ``[INFO]``; falha ao abrir a
+porta ou ao gravar o arquivo gera ``[ERROR]``.
+
 Nesta entrega a conexão é simulada: nenhum byte trafega.
 """
+
+from dataclasses import replace
 
 from PyQt6.QtCore import QDate
 from PyQt6.QtWidgets import QMessageBox, QWidget
 
 from models.barramento import barramento
-from models.config_manager import Configuracao
+from models.config_manager import ConfigManager, Configuracao
 from models.evento import TipoEvento
 from models.log_config import obter_logger
-from models.porta_serial import BAUD_RATES, ErroConexaoSerial, PortaSerial
+from models.porta_serial import (
+    BAUD_RATES,
+    ErroConexaoSerial,
+    ParametrosConexao,
+    PortaSerial,
+)
 from ui.serial_config_ui import Ui_SerialConfig
 
 logger = obter_logger()
@@ -74,7 +86,21 @@ class SerialConfigController(QWidget, Ui_SerialConfig):
             )
             self._avisar(str(erro))
             return
+        except Exception as erro:
+            # Com a porta simulada isto não ocorre; com hardware real (Unidade 4)
+            # é aqui que caem driver ausente, porta ocupada etc.
+            porta = self._porta_selecionada()
+            logger.error("Falha ao abrir a porta %s: %s.", porta, erro)
+            QMessageBox.critical(
+                self, "Comunicação serial", f"Não foi possível abrir a porta {porta}.\n\n{erro}"
+            )
+            return
 
+        logger.info(
+            "Comunicação serial conectada: %s (timeout %d ms).",
+            parametros.descricao, parametros.timeout_ms,
+        )
+        self._salvar_configuracao(parametros)
         self._atualizar_estado_visual()
         barramento.status_conexao_alterado.emit(True, parametros.descricao)
         barramento.registrar_evento(
@@ -91,6 +117,7 @@ class SerialConfigController(QWidget, Ui_SerialConfig):
             self._avisar(str(erro))
             return
 
+        logger.info("Comunicação serial encerrada: %s.", parametros.descricao)
         self._atualizar_estado_visual()
         barramento.status_conexao_alterado.emit(
             False, f"Porta {parametros.porta} liberada"
@@ -100,6 +127,25 @@ class SerialConfigController(QWidget, Ui_SerialConfig):
             f"Comunicação serial encerrada em {parametros.porta}",
             parametros.descricao,
         )
+
+    def _salvar_configuracao(self, parametros: ParametrosConexao) -> None:
+        """Grava a conexão bem-sucedida no config.json, preservando os demais campos."""
+        nova = replace(
+            self._config,
+            porta_com=parametros.porta,
+            baud_rate=parametros.baud_rate,
+            timeout_ms=parametros.timeout_ms,
+        )
+        try:
+            ConfigManager.salvar(nova)
+        except OSError as erro:
+            logger.error("Não foi possível salvar a configuração serial: %s.", erro)
+            self._avisar(
+                "A porta foi conectada, mas a configuração não pôde ser salva "
+                "e não será lembrada na próxima abertura."
+            )
+            return
+        self._config = nova
 
     # ------------------------------------------------------------------
     # Montagem inicial
