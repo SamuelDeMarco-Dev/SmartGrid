@@ -372,6 +372,33 @@ rg -n '(SELECT|INSERT|UPDATE|DELETE).*\.format\(' -g '*.py' .
 rg -n '(SELECT|INSERT|UPDATE|DELETE).*%\s*(\(|[A-Za-z_])' -g '*.py' .
 ```
 
+### Modo de falha simulada (demonstração do rollback)
+
+Faz o corte de emergência falhar **de propósito** depois de atualizar os dispositivos e antes de gravar o evento no histórico. Serve para provar que a transação é desfeita e o banco volta ao estado anterior.
+
+**Como ativar:**
+
+- durante a execução: **`Ctrl+Shift+F`** liga e desliga (vale só enquanto o app estiver aberto);
+- ao abrir o app: `"simular_falha_corte": true` em `data/config.json`.
+
+Com o modo ativo, a barra de status mostra o selo vermelho **MODO DE TESTE: falha simulada**, e cada troca fica no log:
+
+```text
+2026-10-20 14:03:10 [WARNING] Modo de falha simulada ativado.
+2026-10-20 14:03:15 [ERROR] Falha na operação de corte emergencial. Rollback executado: Falha simulada entre corte e histórico.
+2026-10-20 14:03:30 [WARNING] Modo de falha simulada desativado.
+```
+
+**Conferindo o rollback no banco** (antes e depois do corte com falha, os resultados devem ser iguais):
+
+```powershell
+python -c "import sqlite3; c = sqlite3.connect('data/smartgrid.db'); print(c.execute('SELECT tag, status FROM dispositivos').fetchall()); print(c.execute('SELECT COUNT(*) FROM eventos').fetchone())"
+```
+
+Com o `sqlite3` instalado, o equivalente é `sqlite3 data/smartgrid.db "SELECT tag, status FROM dispositivos; SELECT COUNT(*) FROM eventos;"`.
+
+Desativando o modo (`Ctrl+Shift+F` de novo), o corte volta a funcionar: os dispositivos passam para `ABERTO` e o evento aparece no histórico.
+
 ---
 
 ## Checklist da Entrega A1/1
