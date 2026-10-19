@@ -51,10 +51,10 @@ def _mensagens(log, nivel):
 
 
 def test_abre_com_a_configuracao_salva(tela):
-    janela = tela(Configuracao(porta_com="COM3", baud_rate=9600, timeout_ms=2500))
+    janela = tela(Configuracao(porta_com="COM3", baud_rate=115200, timeout_ms=2500))
 
     assert janela.comboPortaSerial.currentText() == "COM3"
-    assert janela.comboBaudRate.currentData() == 9600
+    assert janela.comboBaudRate.currentData() == 115200
     assert janela.editTimeout.text() == "2500"
 
 
@@ -114,14 +114,14 @@ def test_conectar_salva_config_preserva_falha_simulada_e_loga_info(tela, log, ca
 def test_configuracao_salva_volta_na_proxima_abertura(tela):
     primeira = tela()
     primeira.comboPortaSerial.setCurrentText("COM3")
-    primeira.comboBaudRate.setCurrentIndex(primeira.comboBaudRate.findData(9600))
+    primeira.comboBaudRate.setCurrentIndex(primeira.comboBaudRate.findData(115200))
     primeira.editTimeout.setText("4000")
     primeira.conectar()
 
     segunda = tela(ConfigManager.carregar())
 
     assert segunda.comboPortaSerial.currentText() == "COM3"
-    assert segunda.comboBaudRate.currentData() == 9600
+    assert segunda.comboBaudRate.currentData() == 115200
     assert segunda.editTimeout.text() == "4000"
 
 
@@ -133,7 +133,7 @@ def test_desconectar_loga_info(tela, log):
     janela.desconectar()
 
     assert not janela.porta_serial.conectado
-    assert _mensagens(log, "INFO") == ["Comunicação serial encerrada: COM1 @ 115200 bps."]
+    assert _mensagens(log, "INFO") == ["Comunicação serial encerrada: COM1 @ 9600 bps."]
 
 
 def test_falha_ao_gravar_loga_error_e_mantem_conexao(tela, avisos, log, monkeypatch):

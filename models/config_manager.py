@@ -14,7 +14,7 @@ Campos
 Campo                    Padrão       Regra
 =======================  ===========  =========================================
 ``porta_com``            ``"COM1"``   texto não vazio
-``baud_rate``            ``115200``   uma das velocidades de ``BAUD_RATES``
+``baud_rate``            ``9600``     uma das velocidades de ``BAUD_RATES``
 ``timeout_ms``           ``1000``     inteiro de 100 a 10 000 (milissegundos)
 ``limites_iniciais``     ver abaixo   ``corrente``, ``tensao`` e ``potencia``,
                                       números maiores que zero
@@ -45,9 +45,9 @@ Uso
     from models.config_manager import ConfigManager
 
     config = ConfigManager.carregar()
-    config.baud_rate                      # 115200
+    config.baud_rate                      # 9600
 
-    nova = replace(config, porta_com="COM3", baud_rate=9600)
+    nova = replace(config, porta_com="COM3", baud_rate=115200)
     ConfigManager.salvar(nova)
 """
 

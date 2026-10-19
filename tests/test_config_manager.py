@@ -37,7 +37,7 @@ def test_sem_arquivo_cria_com_padroes_e_loga_info(caminho_config, log):
     assert config == Configuracao()
     assert json.loads(caminho_config.read_text(encoding="utf-8")) == {
         "porta_com": "COM1",
-        "baud_rate": 115200,
+        "baud_rate": 9600,
         "timeout_ms": 1000,
         "limites_iniciais": {"corrente": 15.0, "tensao": 230.0, "potencia": 3500.0},
         "simular_falha_corte": False,
@@ -74,7 +74,7 @@ def test_campo_invalido_volta_ao_padrao_e_mantem_os_demais(caminho_config, log):
 
     assert config == Configuracao(
         porta_com="COM7",
-        baud_rate=115200,
+        baud_rate=9600,
         timeout_ms=2500,
         limites_iniciais={"corrente": 25.0, "tensao": 220.0, "potencia": 5000.0},
         simular_falha_corte=True,
@@ -86,7 +86,7 @@ def test_campo_invalido_volta_ao_padrao_e_mantem_os_demais(caminho_config, log):
 def test_campo_ausente_usa_padrao_e_campo_desconhecido_e_ignorado(caminho_config, log):
     _gravar(caminho_config, json.dumps({
         "porta_com": "COM3",
-        "baud_rate": 9600,
+        "baud_rate": 115200,
         "timeout_ms": 500,
         "campo_antigo": "qualquer",
     }))
@@ -95,7 +95,7 @@ def test_campo_ausente_usa_padrao_e_campo_desconhecido_e_ignorado(caminho_config
 
     assert config.simular_falha_corte is False
     assert config.limites_iniciais == LIMITES_INICIAIS_PADRAO
-    assert (config.porta_com, config.baud_rate, config.timeout_ms) == ("COM3", 9600, 500)
+    assert (config.porta_com, config.baud_rate, config.timeout_ms) == ("COM3", 115200, 500)
     assert _niveis(log) == ["WARNING", "WARNING"]
     avisos = " ".join(registro.getMessage() for registro in log.records)
     assert "'limites_iniciais'" in avisos and "'simular_falha_corte'" in avisos
@@ -109,8 +109,8 @@ def test_campo_ausente_usa_padrao_e_campo_desconhecido_e_ignorado(caminho_config
         ("porta_com", 3),
         ("baud_rate", True),
         ("baud_rate", 12345),
-        ("baud_rate", "9600"),
-        ("baud_rate", 9600.0),
+        ("baud_rate", "115200"),
+        ("baud_rate", 115200.0),
         ("timeout_ms", 0),
         ("timeout_ms", -100),
         ("timeout_ms", 99),
@@ -131,7 +131,7 @@ def test_campo_ausente_usa_padrao_e_campo_desconhecido_e_ignorado(caminho_config
 def test_valor_invalido_e_recusado(caminho_config, log, campo, valor):
     dados = {
         "porta_com": "COM3",
-        "baud_rate": 9600,
+        "baud_rate": 115200,
         "timeout_ms": 500,
         "limites_iniciais": {"corrente": 20, "tensao": 220.0, "potencia": 4000.0},
         "simular_falha_corte": True,

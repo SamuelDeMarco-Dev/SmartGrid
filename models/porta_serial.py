@@ -18,7 +18,7 @@ from dataclasses import dataclass
 #: 115200; as intermediárias entram por serem as usuais em módulos ESP32.
 BAUD_RATES = (9600, 19200, 38400, 57600, 115200)
 
-BAUD_RATE_PADRAO = 115200
+BAUD_RATE_PADRAO = 9600
 
 #: Faixa aceita para o timeout, em milissegundos.
 TIMEOUT_MINIMO_MS = 100
