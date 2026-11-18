@@ -163,7 +163,7 @@ class SerialWorker(QThread):
             pass
         self._serial = None
         if interrompido:
-            logger.info("Comunicação serial encerrada: %s.", self.porta)
+            logger.info("Porta %s fechada pela thread serial.", self.porta)
             self._mudar_estado(EstadoLink.DESCONECTADO, f"Porta {self.porta} liberada")
 
     # ------------------------------------------------------------------
