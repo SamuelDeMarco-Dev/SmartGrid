@@ -108,7 +108,8 @@ def test_conectar_salva_config_preserva_falha_simulada_e_loga_info(tela, log, ca
         "simular_falha_corte": True,
     }
     assert _mensagens(log, "INFO") == [
-        "Comunicação serial conectada: COM7 @ 38400 bps (timeout 3000 ms)."
+        "Conexão serial solicitada: COM7 @ 38400 bps (timeout 3000 ms). "
+        "Iniciando handshake a 9600 bps."
     ]
 
 

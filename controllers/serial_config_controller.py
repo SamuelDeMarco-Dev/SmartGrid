@@ -10,7 +10,9 @@ baud rate e timeout a cada conexão bem-sucedida. Entradas inválidas geram
 ``[WARNING]`` no log; conectar e desconectar geram ``[INFO]``; falha ao abrir a
 porta ou ao gravar o arquivo gera ``[ERROR]``.
 
-Nesta entrega a conexão é simulada: nenhum byte trafega.
+"Conectar" valida o formulário e entrega os parâmetros ao serviço serial
+(``AplicacaoController``), que cria a thread do handshake. O resultado —
+telemetria ativa, encerramento ou link perdido — volta pelo barramento.
 """
 
 from dataclasses import replace
@@ -20,7 +22,7 @@ from PyQt6.QtWidgets import QMessageBox, QWidget
 
 from models.barramento import barramento
 from models.config_manager import ConfigManager, Configuracao
-from models.evento import TipoEvento
+from models.estado_link import EstadoLink
 from models.log_config import obter_logger
 from models.porta_serial import (
     BAUD_RATES,
@@ -44,17 +46,24 @@ class SerialConfigController(QWidget, Ui_SerialConfig):
     _COR_CONECTADO = "#2E7D32"
     _COR_DESCONECTADO = "#C62828"
 
-    def __init__(self, config: Configuracao) -> None:
+    def __init__(self, config: Configuracao, servico_serial=None) -> None:
         super().__init__()
         self.setupUi(self)
         self.porta_serial = PortaSerial()
+        #: Quem abre a porta de verdade (``AplicacaoController``). Opcional para
+        #: os testes de formulário, que não sobem a thread serial.
+        self._servico_serial = servico_serial
         self._config = config
+        # Editável para aceitar a porta da placa virtual (/dev/ttysNNN), que
+        # não aparece na enumeração do sistema.
+        self.comboPortaSerial.setEditable(True)
         self._preencher_baud_rates()
         self.editTimeout.setText(str(config.timeout_ms))
         self._configurar_data_sessao()
         self.atualizar_portas()
         self._selecionar_porta_salva()
         self._conectar_acoes()
+        barramento.estado_link_alterado.connect(self._ao_estado_link)
         self._atualizar_estado_visual()
 
     # ------------------------------------------------------------------
@@ -72,13 +81,19 @@ class SerialConfigController(QWidget, Ui_SerialConfig):
         self.comboPortaSerial.setCurrentIndex(max(indice, 0))
 
     def conectar(self) -> None:
-        """Abre a conexão simulada e propaga o novo status."""
+        """Valida o formulário e pede ao serviço serial o handshake na porta."""
         try:
             parametros = self.porta_serial.conectar(
                 porta=self._porta_selecionada(),
                 baud_rate=self._baud_rate_selecionado(),
                 timeout_ms=self._timeout_digitado(),
             )
+            if self._servico_serial is not None:
+                try:
+                    self._servico_serial.conectar_serial(parametros)
+                except Exception:
+                    self.porta_serial.desconectar()
+                    raise
         except ErroConexaoSerial as erro:
             logger.warning(
                 "Entrada inválida em serial: porta=%r, timeout=%r. %s",
@@ -97,20 +112,14 @@ class SerialConfigController(QWidget, Ui_SerialConfig):
             return
 
         logger.info(
-            "Comunicação serial conectada: %s (timeout %d ms).",
+            "Conexão serial solicitada: %s (timeout %d ms). Iniciando handshake a 9600 bps.",
             parametros.descricao, parametros.timeout_ms,
         )
         self._salvar_configuracao(parametros)
         self._atualizar_estado_visual()
-        barramento.status_conexao_alterado.emit(True, parametros.descricao)
-        barramento.registrar_evento(
-            TipoEvento.STATUS,
-            f"Comunicação serial conectada em {parametros.porta}",
-            parametros.descricao_completa,
-        )
 
     def desconectar(self) -> None:
-        """Encerra a conexão simulada e propaga o novo status."""
+        """Pede o encerramento cooperativo da thread serial."""
         try:
             parametros = self.porta_serial.desconectar()
         except ErroConexaoSerial as erro:
@@ -118,15 +127,19 @@ class SerialConfigController(QWidget, Ui_SerialConfig):
             return
 
         logger.info("Comunicação serial encerrada: %s.", parametros.descricao)
+        if self._servico_serial is not None:
+            self._servico_serial.desconectar_serial()
         self._atualizar_estado_visual()
-        barramento.status_conexao_alterado.emit(
-            False, f"Porta {parametros.porta} liberada"
-        )
-        barramento.registrar_evento(
-            TipoEvento.STATUS,
-            f"Comunicação serial encerrada em {parametros.porta}",
-            parametros.descricao,
-        )
+
+    def _ao_estado_link(self, nome: str, detalhe: str) -> None:
+        """Link caiu ou foi encerrado pela thread: libera o formulário."""
+        if EstadoLink[nome] in (EstadoLink.LINK_PERDIDO, EstadoLink.DESCONECTADO):
+            if self.porta_serial.conectado:
+                self.porta_serial.desconectar()
+            self._atualizar_estado_visual()
+        if EstadoLink[nome] is EstadoLink.LINK_PERDIDO:
+            self.labelStatusConexao.setText(f"Link perdido — {detalhe}")
+            self.labelStatusConexao.setStyleSheet(f"color: {self._COR_DESCONECTADO};")
 
     def _salvar_configuracao(self, parametros: ParametrosConexao) -> None:
         """Grava a conexão bem-sucedida no config.json, preservando os demais campos."""
