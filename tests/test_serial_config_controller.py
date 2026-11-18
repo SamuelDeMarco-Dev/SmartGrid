@@ -104,6 +104,7 @@ def test_conectar_salva_config_preserva_falha_simulada_e_loga_info(tela, log, ca
         "baud_rate": 38400,
         "timeout_ms": 3000,
         "limites_iniciais": {"corrente": 15.0, "tensao": 230.0, "potencia": 3500.0},
+        "taxa_amostragem_ms": 1000,
         "simular_falha_corte": True,
     }
     assert _mensagens(log, "INFO") == [
