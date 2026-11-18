@@ -487,16 +487,126 @@
          <property name="minimumSize">
           <size>
            <width>0</width>
-           <height>145</height>
+           <height>240</height>
           </size>
          </property>
          <property name="title">
-          <string>Curva de Demanda — últimas 24 horas</string>
+          <string>Potência ativa — tempo real</string>
          </property>
          <layout class="QVBoxLayout" name="layoutGrafico">
           <property name="spacing">
            <number>6</number>
           </property>
+          <item>
+           <layout class="QHBoxLayout" name="layoutModoGrafico">
+            <property name="spacing">
+             <number>8</number>
+            </property>
+            <item>
+             <widget class="QRadioButton" name="radioTempoReal">
+              <property name="text">
+               <string>Tempo real</string>
+              </property>
+              <property name="checked">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QRadioButton" name="radioHistorico">
+              <property name="text">
+               <string>Histórico</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QComboBox" name="comboFiltroHistorico">
+              <item>
+               <property name="text">
+                <string>Últimas N leituras</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>Intervalo de datas</string>
+               </property>
+              </item>
+             </widget>
+            </item>
+            <item>
+             <widget class="QSpinBox" name="spinUltimasN">
+              <property name="toolTip">
+               <string>Quantidade de leituras mais recentes</string>
+              </property>
+              <property name="minimum">
+               <number>1</number>
+              </property>
+              <property name="maximum">
+               <number>50000</number>
+              </property>
+              <property name="singleStep">
+               <number>100</number>
+              </property>
+              <property name="value">
+               <number>500</number>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QDateTimeEdit" name="dateTimeInicio">
+              <property name="toolTip">
+               <string>Início do intervalo</string>
+              </property>
+              <property name="displayFormat">
+               <string>dd/MM/yyyy HH:mm</string>
+              </property>
+              <property name="calendarPopup">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QDateTimeEdit" name="dateTimeFim">
+              <property name="toolTip">
+               <string>Fim do intervalo</string>
+              </property>
+              <property name="displayFormat">
+               <string>dd/MM/yyyy HH:mm</string>
+              </property>
+              <property name="calendarPopup">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="botaoConsultarHistorico">
+              <property name="text">
+               <string>Consultar</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="espacadorModoGrafico">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>0</width>
+                <height>0</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+            <item>
+             <widget class="QLabel" name="labelStatusGrafico">
+              <property name="text">
+               <string/>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
          </layout>
         </widget>
        </item>
