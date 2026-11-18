@@ -25,9 +25,16 @@ class RepositorioEventos:
         )
 
     def adicionar(
-        self, evento: Evento, conn: sqlite3.Connection | None = None
+        self,
+        evento: Evento,
+        conn: sqlite3.Connection | None = None,
+        dispositivo_tag: str | None = None,
     ) -> None:
-        """Persiste um evento, participando de uma transação externa se fornecida."""
+        """Persiste um evento, participando de uma transação externa se fornecida.
+
+        ``dispositivo_tag`` (ex.: ``"DISJ-01"``) vincula o evento ao dispositivo
+        pela chave estrangeira ``dispositivo_id``.
+        """
         if not isinstance(evento, Evento):
             raise TypeError("O repositório aceita somente objetos Evento.")
 
@@ -36,11 +43,12 @@ class RepositorioEventos:
             evento.tipo.value,
             evento.valor_medido,
             evento.descricao,
+            dispositivo_tag,
         )
         sql = (
             "INSERT INTO eventos "
-            "(data_hora, tipo_evento, valor_medido, descricao) "
-            "VALUES (?, ?, ?, ?)"
+            "(data_hora, tipo_evento, valor_medido, descricao, dispositivo_id) "
+            "VALUES (?, ?, ?, ?, (SELECT id FROM dispositivos WHERE tag = ?))"
         )
 
         if conn is not None:

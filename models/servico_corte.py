@@ -68,7 +68,7 @@ class ServicoCorteEmergencial:
                 self._repo_dispositivos.atualizar_status(self.TAG_DISJUNTOR, status, conn)
                 self._repo_dispositivos.atualizar_status(self.TAG_RELE, status, conn)
                 self._ponto_de_falha()
-                self._repo_eventos.adicionar(evento, conn)
+                self._repo_eventos.adicionar(evento, conn, self.TAG_DISJUNTOR)
         except Exception as erro:
             logger.error(
                 "Falha na operação de corte emergencial. Rollback executado: %s.", erro
@@ -98,7 +98,7 @@ class ServicoCorteEmergencial:
             self._repo_dispositivos.atualizar_status(
                 self.TAG_DISJUNTOR, EstadoDisjuntor.ABERTO.name, conn
             )
-            self._repo_eventos.adicionar(evento, conn)
+            self._repo_eventos.adicionar(evento, conn, self.TAG_DISJUNTOR)
 
         logger.warning("Disparo espontâneo do disjuntor %s registrado.", self.TAG_DISJUNTOR)
         barramento.evento_persistido.emit(evento)

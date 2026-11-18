@@ -1,5 +1,6 @@
 """Esquema relacional do SmartGrid. DDL e dados iniciais."""
 
+# DDL executada em ordem por ``Database.init_db()`` (tabelas e índices).
 TABELAS = (
     """
     CREATE TABLE IF NOT EXISTS dispositivos (
@@ -29,6 +30,18 @@ TABELAS = (
         dispositivo_id INTEGER REFERENCES dispositivos(id) ON DELETE SET NULL
     )
     """,
+    # Histórico de telemetria, gravado continuamente pelo DatabaseWorker.
+    # A potência é gravada já calculada (P = V x I, regra de models.leitura).
+    """
+    CREATE TABLE IF NOT EXISTS leituras (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        data_hora TEXT NOT NULL,
+        tensao REAL NOT NULL CHECK(tensao >= 0),
+        corrente REAL NOT NULL CHECK(corrente >= 0),
+        potencia REAL NOT NULL CHECK(potencia >= 0)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_leituras_data_hora ON leituras(data_hora)",
 )
 
 DISPOSITIVOS_INICIAIS = (

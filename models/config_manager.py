@@ -18,6 +18,8 @@ Campo                    Padrão       Regra
 ``timeout_ms``           ``1000``     inteiro de 100 a 10 000 (milissegundos)
 ``limites_iniciais``     ver abaixo   ``corrente``, ``tensao`` e ``potencia``,
                                       números maiores que zero
+``taxa_amostragem_ms``   ``1000``     inteiro de 100 a 5000: período da
+                                      telemetria pedido à placa no handshake
 ``simular_falha_corte``  ``false``    verdadeiro ou falso
 =======================  ===========  =========================================
 
@@ -59,6 +61,7 @@ from pathlib import Path
 
 from database.schema import REGRAS_INICIAIS
 from models.log_config import obter_logger
+from models.protocolo import INTERVALO_MAXIMO_MS, INTERVALO_MINIMO_MS
 from models.porta_serial import (
     BAUD_RATE_PADRAO,
     BAUD_RATES,
@@ -100,11 +103,18 @@ def _limites_validos(valor) -> bool:
     )
 
 
+#: Período padrão da telemetria pedido à placa no handshake.
+TAXA_AMOSTRAGEM_PADRAO_MS = 1000
+
+
 _VALIDADORES = {
     "porta_com": lambda v: isinstance(v, str) and bool(v.strip()),
     "baud_rate": lambda v: _inteiro(v) and v in BAUD_RATES,
     "timeout_ms": lambda v: _inteiro(v) and TIMEOUT_MINIMO_MS <= v <= TIMEOUT_MAXIMO_MS,
     "limites_iniciais": _limites_validos,
+    "taxa_amostragem_ms": lambda v: (
+        _inteiro(v) and INTERVALO_MINIMO_MS <= v <= INTERVALO_MAXIMO_MS
+    ),
     "simular_falha_corte": lambda v: isinstance(v, bool),
 }
 
@@ -119,6 +129,7 @@ class Configuracao:
     limites_iniciais: dict[str, float] = field(
         default_factory=lambda: dict(LIMITES_INICIAIS_PADRAO)
     )
+    taxa_amostragem_ms: int = TAXA_AMOSTRAGEM_PADRAO_MS
     simular_falha_corte: bool = False
 
     def __post_init__(self) -> None:

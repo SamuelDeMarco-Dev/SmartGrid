@@ -40,6 +40,7 @@ def test_sem_arquivo_cria_com_padroes_e_loga_info(caminho_config, log):
         "baud_rate": 115200,
         "timeout_ms": 1000,
         "limites_iniciais": {"corrente": 15.0, "tensao": 230.0, "potencia": 3500.0},
+        "taxa_amostragem_ms": 1000,
         "simular_falha_corte": False,
     }
     assert _niveis(log) == ["INFO"]
@@ -67,6 +68,7 @@ def test_campo_invalido_volta_ao_padrao_e_mantem_os_demais(caminho_config, log):
         "baud_rate": 12345,
         "timeout_ms": 2500,
         "limites_iniciais": {"corrente": 25.0, "tensao": 220.0, "potencia": 5000.0},
+        "taxa_amostragem_ms": 1000,
         "simular_falha_corte": True,
     }))
 
@@ -96,9 +98,11 @@ def test_campo_ausente_usa_padrao_e_campo_desconhecido_e_ignorado(caminho_config
     assert config.simular_falha_corte is False
     assert config.limites_iniciais == LIMITES_INICIAIS_PADRAO
     assert (config.porta_com, config.baud_rate, config.timeout_ms) == ("COM3", 9600, 500)
-    assert _niveis(log) == ["WARNING", "WARNING"]
+    assert config.taxa_amostragem_ms == 1000
+    assert _niveis(log) == ["WARNING", "WARNING", "WARNING"]
     avisos = " ".join(registro.getMessage() for registro in log.records)
     assert "'limites_iniciais'" in avisos and "'simular_falha_corte'" in avisos
+    assert "'taxa_amostragem_ms'" in avisos
 
 
 @pytest.mark.parametrize(
@@ -116,6 +120,9 @@ def test_campo_ausente_usa_padrao_e_campo_desconhecido_e_ignorado(caminho_config
         ("timeout_ms", 99),
         ("timeout_ms", 10_001),
         ("timeout_ms", False),
+        ("taxa_amostragem_ms", 50),
+        ("taxa_amostragem_ms", 10_000),
+        ("taxa_amostragem_ms", "1000"),
         ("simular_falha_corte", 1),
         ("simular_falha_corte", "false"),
         ("limites_iniciais", "25"),
@@ -134,6 +141,7 @@ def test_valor_invalido_e_recusado(caminho_config, log, campo, valor):
         "baud_rate": 9600,
         "timeout_ms": 500,
         "limites_iniciais": {"corrente": 20, "tensao": 220.0, "potencia": 4000.0},
+        "taxa_amostragem_ms": 1000,
         "simular_falha_corte": True,
     }
     dados[campo] = valor
@@ -150,7 +158,7 @@ def test_valor_invalido_e_recusado(caminho_config, log, campo, valor):
 def test_salvar_e_carregar_devolve_o_mesmo(caminho_config):
     config = Configuracao(
         porta_com="/dev/ttyUSB0",
-        baud_rate=57600,
+        baud_rate=38400,
         timeout_ms=10_000,
         limites_iniciais={"corrente": 32.5, "tensao": 240.0, "potencia": 7000.0},
         simular_falha_corte=True,

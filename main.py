@@ -3,7 +3,9 @@
 Este arquivo deve permanecer enxuto: nenhuma regra de negócio ou tratamento de
 evento aqui. Toda a lógica vive em /controllers e /models.
 
-Ordem de inicialização: log → config.json → banco → GravadorEventos → telas.
+Ordem de inicialização: log → config.json → banco → threads (serial e banco,
+pelo ``AplicacaoController``) → telas. Ao sair, ``aboutToQuit`` encerra as
+threads de forma cooperativa.
 """
 
 import sqlite3
@@ -12,14 +14,14 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
+from controllers.aplicacao_controller import AplicacaoController
 from controllers.dashboard_controller import DashboardController
 from controllers.historico_controller import HistoricoController
 from controllers.main_window_controller import MainWindowController
 from controllers.serial_config_controller import SerialConfigController
 from database.connection import Database
-from models.aquisicao import ServicoAquisicao
 from models.config_manager import ConfigManager, Configuracao
-from models.gravador_eventos import GravadorEventos
+from models.estado_disjuntor import EstadoDisjuntor
 from models.log_config import configurar_log, obter_logger
 from models.modo_falha import ModoFalhaSimulada
 from models.repositorio_dispositivos import RepositorioDispositivos
@@ -66,17 +68,28 @@ def _ligar_modo_falha(
     )
 
 
+def _estado_inicial_disjuntor(servico_corte: ServicoCorteEmergencial) -> EstadoDisjuntor:
+    """Estado gravado no banco; a placa é alinhada a ele ao conectar."""
+    try:
+        return servico_corte.estado_atual()
+    except (sqlite3.Error, LookupError, KeyError) as erro:
+        logger.error("Não foi possível ler o estado do disjuntor: %s", erro)
+        return EstadoDisjuntor.FECHADO
+
+
 def _montar_telas(
     janela: MainWindowController,
     servico_corte: ServicoCorteEmergencial,
     repositorio_regras: RepositorioRegras,
     config: Configuracao,
+    aplicacao: AplicacaoController,
 ) -> None:
     """Encaixa as telas nas páginas reservadas pelo shell da janela principal."""
-    janela.registrar_pagina(
-        "dashboard", DashboardController(servico_corte, repositorio_regras)
-    )
-    janela.registrar_pagina("serial", SerialConfigController(config))
+    # O controller do Dashboard (QObject) fica preso à View para viver com ela.
+    dashboard = DashboardController(servico_corte, repositorio_regras, aplicacao)
+    dashboard.setParent(dashboard.view)
+    janela.registrar_pagina("dashboard", dashboard.view)
+    janela.registrar_pagina("serial", SerialConfigController(config, aplicacao))
     janela.registrar_pagina("historico", HistoricoController())
     janela.ir_para("dashboard")
 
@@ -93,20 +106,17 @@ def main() -> int:
     if not _iniciar_banco(config.limites_iniciais):
         return 1
 
-    repo_eventos = RepositorioEventos()
-    # Único ponto de gravação dos eventos publicados no barramento.
-    GravadorEventos(repo_eventos, parent=app)
-
-    servico_corte = ServicoCorteEmergencial(RepositorioDispositivos(), repo_eventos)
+    servico_corte = ServicoCorteEmergencial(RepositorioDispositivos(), RepositorioEventos())
     repositorio_regras = RepositorioRegras()
 
-    # Fonte da telemetria: publica leituras no barramento enquanto a porta
-    # serial estiver aberta. Fica sob a guarda da QApplication para viver
-    # enquanto a aplicação estiver de pé.
-    ServicoAquisicao(parent=app)
+    # Sobe a thread de banco agora; a serial nasce a cada "Conectar".
+    aplicacao = AplicacaoController(
+        config, servico_corte, _estado_inicial_disjuntor(servico_corte), parent=app
+    )
+    app.aboutToQuit.connect(aplicacao.encerrar)
 
     janela = MainWindowController()
-    _montar_telas(janela, servico_corte, repositorio_regras, config)
+    _montar_telas(janela, servico_corte, repositorio_regras, config, aplicacao)
     _ligar_modo_falha(
         janela, servico_corte, ModoFalhaSimulada(config.simular_falha_corte, parent=app)
     )

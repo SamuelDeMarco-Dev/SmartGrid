@@ -1,125 +1,52 @@
-"""Controller da janela principal — shell que hospeda as telas da aplicação.
+"""Controller da janela principal — navegação, barra de status e modo de teste.
 
-Responsabilidades desta classe:
-    - montar a janela principal a partir do layout compilado em ui/main_window_ui.py;
-    - conectar os Signals & Slots da navegação;
-    - oferecer à equipe os métodos `registrar_pagina` e `ir_para`, usados na
-      integração das telas do M1;
-    - expor o modo de falha simulada (atalho Ctrl+Shift+F e selo na barra de
-      status) por meio de `usar_modo_falha`.
-
-Nenhuma regra de negócio de telemetria, serial, limites ou histórico vive aqui.
+A ``MainWindowView`` desenha o shell; este controller decide qual página
+mostrar, formata o status da conexão publicado no barramento e liga o atalho
+``Ctrl+Shift+F`` ao modo de falha simulada. Nenhuma regra de telemetria,
+serial, limites ou histórico vive aqui.
 """
 
-from PyQt6.QtGui import QKeySequence, QShortcut
-from PyQt6.QtWidgets import QLabel, QMainWindow, QWidget
+from PyQt6.QtCore import QObject
+from PyQt6.QtWidgets import QWidget
 
 from models.barramento import barramento
 from models.modo_falha import ModoFalhaSimulada
-from ui.main_window_ui import Ui_MainWindow
+from views.main_window_view import MainWindowView
 
 
-class MainWindowController(QMainWindow, Ui_MainWindow):
+class MainWindowController(QObject):
     """Janela principal do supervisório SmartGrid."""
 
-    #: Nome lógico de cada página -> índice correspondente no QStackedWidget.
-    #: É o contrato usado pelas telas do M1 para se registrarem no shell.
-    PAGINAS = {
-        "dashboard": 0,
-        "serial": 1,
-        "historico": 2,
-    }
+    PAGINAS = MainWindowView.PAGINAS
 
     ATALHO_MODO_FALHA = "Ctrl+Shift+F"
 
-    def __init__(self) -> None:
+    def __init__(self, view: MainWindowView | None = None) -> None:
         super().__init__()
-        self.setupUi(self)
-        self._criar_selo_modo_teste()
-        self._conectar_navegacao()
-        self._conectar_barramento()
+        self.view = view or MainWindowView()
+        self.view.pagina_solicitada.connect(self.ir_para)
+        barramento.status_conexao_alterado.connect(self.atualizar_status_conexao)
         self.atualizar_status_conexao(False, "Desconectado")
         self.ir_para("dashboard")
 
-    # ------------------------------------------------------------------
-    # API pública consumida pelas demais telas
-    # ------------------------------------------------------------------
     def registrar_pagina(self, nome: str, widget: QWidget) -> None:
-        """Substitui a página reservada `nome` pela tela real recebida.
-
-        Usado na integração do M2:
-
-            janela.registrar_pagina("dashboard", DashboardController())
-        """
-        indice = self._indice_da_pagina(nome)
-        placeholder = self.stackedPaginas.widget(indice)
-        self.stackedPaginas.removeWidget(placeholder)
-        placeholder.deleteLater()
-        self.stackedPaginas.insertWidget(indice, widget)
+        """Encaixa a View de uma tela na página reservada `nome`."""
+        self.view.registrar_pagina(nome, widget)
 
     def ir_para(self, nome: str) -> None:
-        """Exibe a página indicada e sincroniza o botão de navegação."""
-        indice = self._indice_da_pagina(nome)
-        self.stackedPaginas.setCurrentIndex(indice)
-        self._botao_da_pagina(nome).setChecked(True)
+        self.view.mostrar_pagina(nome)
 
     def atualizar_status_conexao(self, conectado: bool, descricao: str) -> None:
-        """Reflete na barra de status o estado da comunicação serial.
-
-        A tela de Comunicação Serial alimenta este método através do
-        barramento de eventos.
-        """
+        """Reflete na barra de status o estado da comunicação serial."""
         prefixo = "Conectado" if conectado else "Desconectado"
-        self.statusbar.showMessage(f"{prefixo} — {descricao}")
+        self.view.mostrar_status(f"{prefixo} — {descricao}")
 
     def usar_modo_falha(self, modo: ModoFalhaSimulada) -> None:
         """Liga o atalho Ctrl+Shift+F e o selo da barra de status ao modo de teste."""
-        self._atalho_modo_falha = QShortcut(QKeySequence(self.ATALHO_MODO_FALHA), self)
-        self._atalho_modo_falha.activated.connect(modo.alternar)
-        modo.alterado.connect(self.seloModoTeste.setVisible)
-        self.seloModoTeste.setVisible(modo.ativo)
+        self.view.habilitar_atalho_modo_falha(self.ATALHO_MODO_FALHA)
+        self.view.modo_falha_solicitado.connect(modo.alternar)
+        modo.alterado.connect(self.view.mostrar_selo_modo_teste)
+        self.view.mostrar_selo_modo_teste(modo.ativo)
 
-    # ------------------------------------------------------------------
-    # Internos
-    # ------------------------------------------------------------------
-    def _criar_selo_modo_teste(self) -> None:
-        # Widget permanente: as mensagens da conexão serial (showMessage) não o
-        # apagam, então o selo fica visível enquanto o modo estiver ativo.
-        self.seloModoTeste = QLabel("MODO DE TESTE: falha simulada")
-        self.seloModoTeste.setStyleSheet(
-            "background-color: #C62828; color: #FFFFFF; font-weight: bold;"
-            "padding: 2px 8px; border-radius: 3px;"
-        )
-        self.seloModoTeste.setVisible(False)
-        self.statusbar.addPermanentWidget(self.seloModoTeste)
-
-    def _conectar_navegacao(self) -> None:
-        self.botaoDashboard.clicked.connect(lambda: self.ir_para("dashboard"))
-        self.botaoSerial.clicked.connect(lambda: self.ir_para("serial"))
-        self.botaoHistorico.clicked.connect(lambda: self.ir_para("historico"))
-
-        self.actionDashboard.triggered.connect(lambda: self.ir_para("dashboard"))
-        self.actionSerial.triggered.connect(lambda: self.ir_para("serial"))
-        self.actionHistorico.triggered.connect(lambda: self.ir_para("historico"))
-        self.actionSair.triggered.connect(self.close)
-
-    def _conectar_barramento(self) -> None:
-        """A barra de status espelha o estado publicado pela tela serial."""
-        barramento.status_conexao_alterado.connect(self.atualizar_status_conexao)
-
-    def _indice_da_pagina(self, nome: str) -> int:
-        if nome not in self.PAGINAS:
-            raise KeyError(
-                f"Página desconhecida: {nome!r}. Disponíveis: {sorted(self.PAGINAS)}"
-            )
-        return self.PAGINAS[nome]
-
-    def _botao_da_pagina(self, nome: str):
-        botoes = {
-            "dashboard": self.botaoDashboard,
-            "serial": self.botaoSerial,
-            "historico": self.botaoHistorico,
-        }
-        return botoes[nome]
-
-
+    def show(self) -> None:
+        self.view.show()

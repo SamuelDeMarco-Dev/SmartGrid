@@ -14,9 +14,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-#: Velocidades oferecidas na tela. As duas exigidas pelo README são 9600 e
-#: 115200; as intermediárias entram por serem as usuais em módulos ESP32.
-BAUD_RATES = (9600, 19200, 38400, 57600, 115200)
+from models.protocolo import VELOCIDADES
+
+#: Velocidades oferecidas na tela — as quatro que a placa negocia. A conexão
+#: sempre começa em 9600 bps; o valor escolhido é a velocidade ALVO do handshake.
+BAUD_RATES = VELOCIDADES
 
 BAUD_RATE_PADRAO = 115200
 
