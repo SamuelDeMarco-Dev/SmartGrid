@@ -150,7 +150,7 @@ def test_valor_invalido_e_recusado(caminho_config, log, campo, valor):
 def test_salvar_e_carregar_devolve_o_mesmo(caminho_config):
     config = Configuracao(
         porta_com="/dev/ttyUSB0",
-        baud_rate=57600,
+        baud_rate=38400,
         timeout_ms=10_000,
         limites_iniciais={"corrente": 32.5, "tensao": 240.0, "potencia": 7000.0},
         simular_falha_corte=True,

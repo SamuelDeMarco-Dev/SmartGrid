@@ -93,7 +93,7 @@ def test_conectar_sem_porta_avisa_e_loga(tela, avisos, log):
 def test_conectar_salva_config_preserva_falha_simulada_e_loga_info(tela, log, caminho_config):
     janela = tela(Configuracao(simular_falha_corte=True))
     janela.comboPortaSerial.setCurrentText("COM7")
-    janela.comboBaudRate.setCurrentIndex(janela.comboBaudRate.findData(57600))
+    janela.comboBaudRate.setCurrentIndex(janela.comboBaudRate.findData(38400))
     janela.editTimeout.setText("3000")
 
     janela.conectar()
@@ -101,13 +101,13 @@ def test_conectar_salva_config_preserva_falha_simulada_e_loga_info(tela, log, ca
     assert janela.porta_serial.conectado
     assert json.loads(caminho_config.read_text(encoding="utf-8")) == {
         "porta_com": "COM7",
-        "baud_rate": 57600,
+        "baud_rate": 38400,
         "timeout_ms": 3000,
         "limites_iniciais": {"corrente": 15.0, "tensao": 230.0, "potencia": 3500.0},
         "simular_falha_corte": True,
     }
     assert _mensagens(log, "INFO") == [
-        "Comunicação serial conectada: COM7 @ 57600 bps (timeout 3000 ms)."
+        "Comunicação serial conectada: COM7 @ 38400 bps (timeout 3000 ms)."
     ]
 
 
