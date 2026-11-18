@@ -49,6 +49,11 @@ class Barramento(QObject):
     #: Estado da conexão serial: (conectado, descrição legível).
     status_conexao_alterado = pyqtSignal(bool, str)
 
+    #: Fase do link com a placa: (``EstadoLink.name``, detalhe legível).
+    #: Mais fino que ``status_conexao_alterado``: mostra o handshake a 9600,
+    #: a negociação de velocidade e a queda do link.
+    estado_link_alterado = pyqtSignal(str, str)
+
     def registrar_evento(
         self, tipo: TipoEvento, descricao: str, valor_medido: str = ""
     ) -> Evento:
