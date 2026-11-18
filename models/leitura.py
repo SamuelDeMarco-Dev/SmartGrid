@@ -25,6 +25,11 @@ class Leitura:
         if self.corrente < 0:
             raise ValueError("A corrente eficaz não pode ser negativa.")
 
+    @classmethod
+    def zerada(cls) -> "Leitura":
+        """Amostra nula do instante atual — instalação sem telemetria."""
+        return cls(instante=datetime.now(), tensao=0.0, corrente=0.0)
+
     @property
     def potencia(self) -> float:
         """Potência ativa aproximada em watts (P = V x I)."""
