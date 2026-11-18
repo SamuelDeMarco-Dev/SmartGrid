@@ -84,6 +84,11 @@ class AplicacaoController(QObject):
     # Conexão serial
     # ------------------------------------------------------------------
     @property
+    def estado_disjuntor(self) -> EstadoDisjuntor:
+        """Último estado do disjuntor confirmado no banco ou reportado pela placa."""
+        return self._estado_disjuntor
+
+    @property
     def serial_ativa(self) -> bool:
         return self._serial is not None
 

@@ -85,9 +85,10 @@ def _montar_telas(
     aplicacao: AplicacaoController,
 ) -> None:
     """Encaixa as telas nas páginas reservadas pelo shell da janela principal."""
-    janela.registrar_pagina(
-        "dashboard", DashboardController(servico_corte, repositorio_regras)
-    )
+    # O controller do Dashboard (QObject) fica preso à View para viver com ela.
+    dashboard = DashboardController(servico_corte, repositorio_regras, aplicacao)
+    dashboard.setParent(dashboard.view)
+    janela.registrar_pagina("dashboard", dashboard.view)
     janela.registrar_pagina("serial", SerialConfigController(config, aplicacao))
     janela.registrar_pagina("historico", HistoricoController())
     janela.ir_para("dashboard")
