@@ -33,6 +33,14 @@ class Database:
         ``config.json``) substitui o limite padrão de cada regra inicial. Só é
         usado quando ``regras_limites`` está vazia: depois disso vale o banco.
         """
+        # WAL deixa a GUI ler enquanto o DatabaseWorker grava. É persistente
+        # no arquivo e não pode ser trocado dentro de uma transação.
+        conn = cls.conectar()
+        try:
+            conn.execute("PRAGMA journal_mode=WAL;")
+        finally:
+            conn.close()
+
         with cls.transacao() as conn:
             for ddl in TABELAS:
                 conn.execute(ddl)
