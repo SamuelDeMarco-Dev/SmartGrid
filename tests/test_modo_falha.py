@@ -69,31 +69,31 @@ def janela(app):
     janela = MainWindowController()
     janela.show()
     # O atalho só dispara com a janela ativa; processa os eventos de exibição.
-    janela.activateWindow()
+    janela.view.activateWindow()
     app.processEvents()
     yield janela
-    janela.close()
+    janela.view.close()
 
 
 def test_atalho_alterna_o_modo_e_o_selo(janela):
     modo = ModoFalhaSimulada()
     janela.usar_modo_falha(modo)
-    assert not janela.seloModoTeste.isVisible()
+    assert not janela.view.seloModoTeste.isVisible()
 
-    QTest.keyClick(janela, Qt.Key.Key_F, CTRL_SHIFT)
+    QTest.keyClick(janela.view, Qt.Key.Key_F, CTRL_SHIFT)
     assert modo.ativo is True
-    assert janela.seloModoTeste.isVisible()
-    assert janela.seloModoTeste.text() == "MODO DE TESTE: falha simulada"
+    assert janela.view.seloModoTeste.isVisible()
+    assert janela.view.seloModoTeste.text() == "MODO DE TESTE: falha simulada"
 
-    QTest.keyClick(janela, Qt.Key.Key_F, CTRL_SHIFT)
+    QTest.keyClick(janela.view, Qt.Key.Key_F, CTRL_SHIFT)
     assert modo.ativo is False
-    assert not janela.seloModoTeste.isVisible()
+    assert not janela.view.seloModoTeste.isVisible()
 
 
 def test_selo_ja_aparece_se_o_modo_comecar_ligado(janela):
     janela.usar_modo_falha(ModoFalhaSimulada(True))
 
-    assert janela.seloModoTeste.isVisible()
+    assert janela.view.seloModoTeste.isVisible()
 
 
 def test_mensagem_da_conexao_serial_nao_apaga_o_selo(janela):
@@ -101,5 +101,5 @@ def test_mensagem_da_conexao_serial_nao_apaga_o_selo(janela):
 
     janela.atualizar_status_conexao(True, "COM3 @ 9600 bps")
 
-    assert janela.seloModoTeste.isVisible()
-    assert janela.statusbar.currentMessage() == "Conectado — COM3 @ 9600 bps"
+    assert janela.view.seloModoTeste.isVisible()
+    assert janela.view.statusbar.currentMessage() == "Conectado — COM3 @ 9600 bps"
