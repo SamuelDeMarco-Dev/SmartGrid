@@ -145,7 +145,7 @@ O esquema e os dados iniciais ficam em `database/schema.py`.
 
 | Repositório | Operações |
 |---|---|
-| `RepositorioEventos` | `listar_todos()`, `filtrar(tipo, data_inicio)`, `adicionar(evento)`, `limpar()` |
+| `RepositorioEventos` | `listar_todos()`, `filtrar(tipo, data_inicio, dispositivo_id)`, `adicionar(evento)`, `limpar()`, `consultar_historico(filtro)`, `consultar_novos(apos_id)` |
 | `RepositorioRegras` | `obter_regras()`, `salvar_regras(lista)` (troca o conjunto inteiro numa única transação) |
 | `RepositorioDispositivos` | `listar()`, `obter_por_tag(tag)`, `atualizar_status(tag, status)` |
 
@@ -153,8 +153,9 @@ Todo método que escreve aceita um parâmetro opcional `conn`: com ele, particip
 
 **Integração com a interface:**
 
-- A tabela do Histórico carrega os dados do banco no `showEvent`, via `RepositorioEventos.listar_todos()` (ou `filtrar` com filtros aplicados). Não existem mais dados estáticos.
-- Eventos gerados na tela (corte emergencial, alarme de limite, disparo do disjuntor, conexão serial) são publicados no barramento, gravados no SQLite pelo `GravadorEventos` e só então emitidos como `evento_persistido`, que atualiza a tabela. **A tabela nunca mostra um evento que não está no banco.**
+- `HistoricoView` publica filtros e ações; `HistoricoController` (`QObject`) consulta e limpa pelo `DatabaseWorker.executar()` compartilhado. Tipo, data inicial e dispositivo são combináveis; o `LEFT JOIN` preserva eventos sem dispositivo. A tabela é somente leitura e preenchida em lotes de 100 linhas, sem medir todas as células a cada atualização.
+- Eventos gerados na tela (corte emergencial, alarme de limite, disparo do disjuntor, conexão serial) são publicados no barramento e gravados pelo `DatabaseWorker` ou pela transação do serviço de corte. Só depois do commit é emitido `evento_persistido`. O histórico agrupa essas notificações por 150 ms e busca apenas os IDs posteriores ao snapshot, com o dispositivo real do banco. Não repete a consulta completa a cada evento nem altera o contrato de `Evento`.
+- Respostas de filtros antigos são descartadas; o fechamento da tela solta seus callbacks sem cancelar gravações já enfileiradas. Limpar exige confirmação visual, desabilita o botão durante a operação e informa sucesso ou erro.
 - O dashboard restaura o estado do disjuntor a partir de `dispositivos` ao abrir.
 
 ### Transações atômicas e tratamento de erros
@@ -479,9 +480,9 @@ barramento.evento_persistido.connect(self._adicionar_linha)
 barramento.registrar_evento(TipoEvento.COMANDO, "Corte de emergência acionado", "12.50 A / 2750 W")
 ```
 
-Um evento só chega ao Histórico depois de gravado: a tela publica `evento_registrado`, o `GravadorEventos` grava no SQLite e emite `evento_persistido`. Se a gravação falhar, o erro vai para o log e o evento não aparece na tabela.
+Um evento só chega ao Histórico depois de gravado: a tela publica `evento_registrado`, o `DatabaseWorker` grava no SQLite e emite `evento_persistido`. Se a gravação falhar, o erro vai para o log e o evento não aparece na tabela.
 
-A janela principal expõe `registrar_pagina(nome, widget)` e `ir_para(nome)`. O `main.py` usa esses métodos para encaixar `DashboardController`, `SerialConfigController` e `HistoricoController` no `QStackedWidget` do shell.
+A janela principal expõe `registrar_pagina(nome, widget)` e `ir_para(nome)`. O `main.py` registra as Views do Dashboard e do Histórico, mantendo seus controllers como filhos das respectivas Views, e a tela `SerialConfigController` no `QStackedWidget` do shell.
 
 ### Compilação das Telas do Qt Designer
 
@@ -631,8 +632,8 @@ rg -n '(SELECT|INSERT|UPDATE|DELETE).*%\s*(\(|[A-Za-z_])' -g '*.py' .
 | Tabelas de dispositivos, histórico de eventos e regras/limites | `database/schema.py` |
 | `PRIMARY KEY`, `NOT NULL`, `CHECK(status IN ('ABERTO','FECHADO'))` e `PRAGMA foreign_keys = ON;` | `database/schema.py`, `Database.conectar()` |
 | CRUD nos repositórios, com SQL parametrizado (`?`) | `models/repositorio_*.py` |
-| `QTableWidget` carregada do banco via `listar_todos()` | `HistoricoController.showEvent` |
-| Novos eventos gravados no SQLite e refletidos na tabela | `GravadorEventos` → `evento_persistido` |
+| `QTableWidget` carregada assincronamente, com filtros e dispositivo | `HistoricoView` → `HistoricoController` → `DatabaseWorker.executar` |
+| Novos eventos gravados no SQLite e refletidos incrementalmente na tabela | `DatabaseWorker` / serviço de corte → `evento_persistido` → consulta de IDs novos |
 | Validação preventiva com `QMessageBox` (vazio, letras, negativo) | Diálogo de Limites e tela Serial |
 | Corte emergencial "tudo ou nada" (disjuntor + evento) | `ServicoCorteEmergencial` com `Database.transacao()` |
 | `timeout` contra bloqueio e nenhum `except: pass` | `Database.conectar()` e controllers |
