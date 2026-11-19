@@ -28,6 +28,7 @@ from models.repositorio_dispositivos import RepositorioDispositivos
 from models.repositorio_eventos import RepositorioEventos
 from models.repositorio_regras import RepositorioRegras
 from models.servico_corte import ServicoCorteEmergencial
+from views.historico_view import HistoricoView
 
 FOLHA_DE_ESTILO = Path(__file__).parent / "ui" / "estilo.qss"
 
@@ -90,7 +91,9 @@ def _montar_telas(
     dashboard.setParent(dashboard.view)
     janela.registrar_pagina("dashboard", dashboard.view)
     janela.registrar_pagina("serial", SerialConfigController(config, aplicacao))
-    janela.registrar_pagina("historico", HistoricoController())
+    historico = HistoricoController(HistoricoView(), aplicacao.banco)
+    historico.setParent(historico.view)
+    janela.registrar_pagina("historico", historico.view)
     janela.ir_para("dashboard")
 
 

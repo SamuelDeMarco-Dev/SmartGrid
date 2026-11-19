@@ -169,6 +169,33 @@
        </layout>
       </item>
       <item>
+       <layout class="QVBoxLayout" name="layoutFiltroDispositivo">
+        <property name="spacing">
+         <number>4</number>
+        </property>
+        <item>
+         <widget class="QLabel" name="labelFiltroDispositivo">
+          <property name="text">
+           <string>Dispositivo</string>
+          </property>
+          <property name="buddy">
+           <cstring>comboDispositivo</cstring>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="comboDispositivo">
+          <property name="minimumSize">
+           <size><width>170</width><height>0</height></size>
+          </property>
+          <item>
+           <property name="text"><string>Todos os dispositivos</string></property>
+          </item>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
        <spacer name="espacadorFiltros">
         <property name="orientation">
          <enum>Qt::Orientation::Horizontal</enum>
@@ -180,6 +207,11 @@
          </size>
         </property>
        </spacer>
+      </item>
+      <item>
+       <widget class="QPushButton" name="botaoAtualizarHistorico">
+        <property name="text"><string>Atualizar</string></property>
+       </widget>
       </item>
       <item>
        <widget class="QPushButton" name="botaoLimparHistorico">
@@ -196,6 +228,26 @@
       </item>
      </layout>
     </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="layoutStatusHistorico">
+     <item>
+      <widget class="QLabel" name="labelStatusHistorico">
+       <property name="text"><string/></property>
+       <property name="wordWrap"><bool>true</bool></property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QProgressBar" name="progressoHistorico">
+       <property name="maximumSize">
+        <size><width>180</width><height>12</height></size>
+       </property>
+       <property name="minimum"><number>0</number></property>
+       <property name="maximum"><number>0</number></property>
+       <property name="textVisible"><bool>false</bool></property>
+      </widget>
+     </item>
+    </layout>
    </item>
    <item>
     <widget class="QTableWidget" name="tabelaEventos">
@@ -224,7 +276,7 @@
       <number>0</number>
      </property>
      <property name="columnCount">
-      <number>4</number>
+      <number>5</number>
      </property>
      <attribute name="horizontalHeaderVisible">
       <bool>true</bool>
@@ -262,6 +314,11 @@
      <column>
       <property name="text">
        <string>Valor Medido</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>Dispositivo</string>
       </property>
      </column>
     </widget>

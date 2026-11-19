@@ -124,6 +124,14 @@ class DatabaseWorker(QThread):
         self._fila.put(_Tarefa(funcao, args, kwargs, id_tarefa))
         return id_tarefa
 
+    def descartar_callbacks(self, id_tarefa: int) -> None:
+        """Desliga os callbacks de uma tela encerrada, sem cancelar o I/O.
+
+        A tarefa ainda termina normalmente na fila; seu resultado não mantém
+        referências nem tenta acessar widgets que já foram destruídos.
+        """
+        self._retirar_callbacks(id_tarefa)
+
     def parar(self) -> None:
         """Pede o encerramento depois de esvaziar o que já está na fila."""
         self.requestInterruption()

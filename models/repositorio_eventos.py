@@ -7,8 +7,15 @@ from datetime import date, datetime, time
 
 from database.connection import Database
 from models.evento import Evento, TipoEvento
+from models.historico import ConsultaHistorico, EventoHistorico, FiltroHistorico
 
 FORMATO_DATA_HORA_BANCO = "%Y-%m-%d %H:%M:%S"
+
+_SELECT_HISTORICO = """
+    SELECT e.id, e.data_hora, e.tipo_evento, e.descricao, e.valor_medido,
+           e.dispositivo_id, d.tag AS dispositivo_tag
+    FROM eventos e LEFT JOIN dispositivos d ON d.id = e.dispositivo_id
+"""
 
 
 class RepositorioEventos:
@@ -62,13 +69,14 @@ class RepositorioEventos:
         self,
         tipo: TipoEvento | None = None,
         data_inicio: date | datetime | None = None,
+        dispositivo_id: int | None = None,
     ) -> list[Evento]:
-        """Filtra eventos por tipo e/ou data inicial."""
+        """Filtra eventos, preservando o retorno legado de objetos Evento."""
         if tipo is not None and not isinstance(tipo, TipoEvento):
             raise TypeError("tipo deve ser uma instância de TipoEvento ou None.")
 
         condicoes: list[str] = []
-        parametros: list[str] = []
+        parametros: list[str | int] = []
 
         if tipo is not None:
             condicoes.append("tipo_evento = ?")
@@ -79,6 +87,10 @@ class RepositorioEventos:
             condicoes.append("data_hora >= ?")
             parametros.append(data_limite.strftime(FORMATO_DATA_HORA_BANCO))
 
+        if dispositivo_id is not None:
+            condicoes.append("dispositivo_id = ?")
+            parametros.append(dispositivo_id)
+
         sql = (
             "SELECT data_hora, tipo_evento, descricao, valor_medido "
             "FROM eventos"
@@ -88,6 +100,65 @@ class RepositorioEventos:
         sql += " ORDER BY data_hora DESC, id DESC"
 
         return self._consultar(sql, parametros)
+
+    def consultar_historico(self, filtro: FiltroHistorico) -> ConsultaHistorico:
+        """Lê linhas, dispositivos e cursor no mesmo snapshot do SQLite.
+
+        O cursor inclui também eventos fora do filtro. Assim uma atualização
+        incremental nunca precisa repetir a consulta completa do histórico.
+        """
+        condicoes: list[str] = []
+        parametros: list[str | int] = []
+        if filtro.tipo is not None:
+            condicoes.append("e.tipo_evento = ?")
+            parametros.append(filtro.tipo.value)
+        if filtro.data_inicio is not None:
+            condicoes.append("e.data_hora >= ?")
+            parametros.append(
+                self._normalizar_data_inicio(filtro.data_inicio).strftime(FORMATO_DATA_HORA_BANCO)
+            )
+        if filtro.dispositivo_id is not None:
+            condicoes.append("e.dispositivo_id = ?")
+            parametros.append(filtro.dispositivo_id)
+
+        sql = _SELECT_HISTORICO
+        if condicoes:
+            sql += " WHERE " + " AND ".join(condicoes)
+        sql += " ORDER BY e.data_hora DESC, e.id DESC"
+
+        conexao = Database.conectar()
+        try:
+            conexao.execute("BEGIN")
+            ultimo_id = conexao.execute("SELECT COALESCE(MAX(id), 0) FROM eventos").fetchone()[0]
+            linhas = conexao.execute(sql, parametros).fetchall()
+            dispositivos = [
+                (linha["id"], linha["tag"])
+                for linha in conexao.execute("SELECT id, tag FROM dispositivos ORDER BY tag")
+            ]
+        finally:
+            conexao.close()
+
+        return ConsultaHistorico(
+            [self._registro_da_linha(linha) for linha in linhas], ultimo_id, dispositivos
+        )
+
+    def consultar_novos(self, apos_id: int) -> list[EventoHistorico]:
+        """Busca somente IDs novos; não deduz o dispositivo a partir do sinal."""
+        conexao = Database.conectar()
+        try:
+            linhas = conexao.execute(
+                _SELECT_HISTORICO + " WHERE e.id > ? ORDER BY e.data_hora DESC, e.id DESC",
+                (apos_id,),
+            ).fetchall()
+        finally:
+            conexao.close()
+        return [self._registro_da_linha(linha) for linha in linhas]
+
+    def _registro_da_linha(self, linha: sqlite3.Row) -> EventoHistorico:
+        return EventoHistorico(
+            linha["id"], self._evento_da_linha(linha),
+            linha["dispositivo_id"], linha["dispositivo_tag"],
+        )
 
     def limpar(self, conn: sqlite3.Connection | None = None) -> int:
         """Remove os eventos e retorna a quantidade de registros afetados.
@@ -106,7 +177,7 @@ class RepositorioEventos:
         return quantidade_removida
 
     def _consultar(
-        self, sql: str, parametros: list[str] | None = None
+        self, sql: str, parametros: list[str | int] | None = None
     ) -> list[Evento]:
         conexao = Database.conectar()
         try:
