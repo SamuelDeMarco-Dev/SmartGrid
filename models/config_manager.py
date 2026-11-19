@@ -28,8 +28,9 @@ As regras de porta, velocidade e timeout são as mesmas da tela serial
 
 ``limites_iniciais`` (padrão ``{"corrente": 15.0, "tensao": 230.0,
 "potencia": 3500.0}``, em A, V e W) semeia a tabela ``regras_limites`` quando o
-banco é criado. Depois disso a fonte oficial dos limites é o banco, editado
-pelo diálogo de limites; mudar o JSON só vale para um banco novo.
+banco é criado. O diálogo atualiza as regras no SQLite e espelha os limites
+de tensão e corrente no JSON. O SQLite continua sendo a fonte das regras
+ativas. Uma falha ao atualizar o JSON não desfaz a transação já confirmada.
 
 Tolerância a falhas
 -------------------
@@ -56,8 +57,9 @@ Uso
 import json
 import math
 import os
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
+from threading import RLock
 
 from database.schema import REGRAS_INICIAIS
 from models.log_config import obter_logger
@@ -88,18 +90,24 @@ LIMITES_INICIAIS_PADRAO = {
 }
 
 
+def _limite_valido(valor) -> bool:
+    try:
+        return (
+            isinstance(valor, (int, float))
+            and not isinstance(valor, bool)
+            and math.isfinite(valor)
+            and valor > 0
+        )
+    except OverflowError:
+        return False
+
+
 def _limites_validos(valor) -> bool:
     """Exige exatamente corrente, tensão e potência, todos números finitos > 0."""
     return (
         isinstance(valor, dict)
         and set(valor) == set(LIMITES_INICIAIS_PADRAO)
-        and all(
-            isinstance(limite, (int, float))
-            and not isinstance(limite, bool)
-            and math.isfinite(limite)
-            and limite > 0
-            for limite in valor.values()
-        )
+        and all(_limite_valido(limite) for limite in valor.values())
     )
 
 
@@ -148,28 +156,29 @@ def _exibir_caminho() -> str:
 
 
 class ConfigManager:
-    """Lê e grava ``data/config.json`` sem nunca derrubar a aplicação."""
+    """Lê e grava ``data/config.json`` com substituição atômica."""
+
+    _trava = RLock()
 
     @classmethod
     def carregar(cls) -> Configuracao:
         """Devolve a configuração do arquivo, criando-o ou corrigindo o que for preciso."""
-        if not os.path.exists(CAMINHO_CONFIG):
-            return cls._criar_com_padroes()
-
-        try:
-            with open(CAMINHO_CONFIG, encoding="utf-8") as arquivo:
-                dados = json.load(arquivo)
-        except ValueError as erro:
-            logger.warning(
-                "Arquivo de configuração %s ilegível (%s). Usando valores padrão.",
-                _exibir_caminho(), erro,
-            )
-            return Configuracao()
-        except OSError as erro:
-            logger.error(
-                "Não foi possível ler %s: %s. Usando valores padrão.", _exibir_caminho(), erro
-            )
-            return Configuracao()
+        with cls._trava:
+            try:
+                dados = cls._ler_arquivo()
+            except FileNotFoundError:
+                return cls._criar_com_padroes()
+            except ValueError as erro:
+                logger.warning(
+                    "Arquivo de configuração %s ilegível (%s). Usando valores padrão.",
+                    _exibir_caminho(), erro,
+                )
+                return Configuracao()
+            except OSError as erro:
+                logger.error(
+                    "Não foi possível ler %s: %s. Usando valores padrão.", _exibir_caminho(), erro
+                )
+                return Configuracao()
 
         if not isinstance(dados, dict):
             logger.warning(
@@ -180,24 +189,67 @@ class ConfigManager:
 
         return cls._montar(dados)
 
+    @classmethod
+    def atualizar(
+        cls, *, padrao: Configuracao | None = None,
+        limites_iniciais: dict[str, float] | None = None, **alteracoes,
+    ) -> Configuracao:
+        """Atualiza campos sobre a versão mais recente do arquivo, numa só operação.
+
+        Chamadores nas telas enfileiram esta operação no worker. Falhas de leitura
+        são propagadas para evitar substituir um arquivo que não foi lido.
+        """
+        with cls._trava:
+            try:
+                dados = cls._ler_arquivo()
+            except FileNotFoundError:
+                dados = asdict(padrao or Configuracao())
+            if not isinstance(dados, dict):
+                raise ValueError("O config.json deve conter um objeto JSON.")
+
+            if limites_iniciais is not None:
+                originais = dados.get("limites_iniciais")
+                validos = {
+                    chave: originais[chave]
+                    for chave in LIMITES_INICIAIS_PADRAO
+                    if isinstance(originais, dict) and _limite_valido(originais.get(chave))
+                }
+                alteracoes["limites_iniciais"] = (
+                    LIMITES_INICIAIS_PADRAO | validos | limites_iniciais
+                )
+
+            nova = replace(cls._montar(dados), **alteracoes)
+            extras = {chave: valor for chave, valor in dados.items() if chave not in _VALIDADORES}
+            if extras:
+                cls.salvar(nova, extras=extras)
+            else:
+                cls.salvar(nova)
+            return nova
+
     @staticmethod
-    def salvar(config: Configuracao) -> None:
+    def _ler_arquivo():
+        with open(CAMINHO_CONFIG, encoding="utf-8") as arquivo:
+            return json.load(arquivo)
+
+    @classmethod
+    def salvar(cls, config: Configuracao, *, extras: dict | None = None) -> None:
         """Grava de forma atômica: escreve em ``.tmp`` e troca o arquivo com ``os.replace``.
 
         Levanta ``OSError`` se o disco falhar; o arquivo anterior fica intacto.
         """
-        CAMINHO_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-        temporario = CAMINHO_CONFIG.with_name(CAMINHO_CONFIG.name + ".tmp")
-        try:
-            with open(temporario, "w", encoding="utf-8") as arquivo:
-                json.dump(asdict(config), arquivo, ensure_ascii=False, indent=2)
-                arquivo.write("\n")
-                arquivo.flush()
-                os.fsync(arquivo.fileno())
-            os.replace(temporario, CAMINHO_CONFIG)
-        except OSError:
-            temporario.unlink(missing_ok=True)
-            raise
+        with cls._trava:
+            CAMINHO_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+            temporario = CAMINHO_CONFIG.with_name(CAMINHO_CONFIG.name + ".tmp")
+            try:
+                with open(temporario, "w", encoding="utf-8") as arquivo:
+                    json.dump((extras or {}) | asdict(config), arquivo, ensure_ascii=False, indent=2)
+                    arquivo.write("\n")
+                    arquivo.flush()
+                    os.fsync(arquivo.fileno())
+                os.replace(temporario, CAMINHO_CONFIG)
+            except OSError:
+                temporario.unlink(missing_ok=True)
+                raise
 
     @classmethod
     def _criar_com_padroes(cls) -> Configuracao:
