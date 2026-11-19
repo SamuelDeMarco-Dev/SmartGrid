@@ -281,10 +281,12 @@ void setup() {
 }
 
 void loop() {
-  unsigned long agora = millis();
-
   lerSerial();
   verificarBotao();
+
+  // lerSerial() pode renovar ultimoHost: use um instante posterior para
+  // evitar underflow sem sinal e um falso timeout no mesmo ciclo.
+  unsigned long agora = millis();
 
   if (estado == AGUARDANDO_SYNC && (long)(agora - prazoSync) > 0) {
     voltarAEsperar();
