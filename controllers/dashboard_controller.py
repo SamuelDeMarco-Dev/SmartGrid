@@ -34,6 +34,7 @@ from models.repositorio_regras import RepositorioRegras
 from models.servico_corte import FalhaCorteEmergencial, ServicoCorteEmergencial
 from views import dashboard_view as cores
 from views.dashboard_view import DashboardView
+from views.limites_dialog_view import LimitesDialogView
 
 logger = logging.getLogger("smartgrid")
 
@@ -229,10 +230,10 @@ class DashboardController(QObject):
         self.view.mostrar_resumo_regras(f"Regras ativas — {itens}")
 
     def abrir_dialogo_limites(self) -> None:
-        """Abre o QDialog modal e resgata os parâmetros ao fechar."""
-        dialogo = LimitesDialogController(self._repositorio_regras, parent=self.view)
-        if dialogo.exec() == LimitesDialogController.DialogCode.Accepted:
-            self._aplicar_regras(dialogo.regras())
+        """Abre a edição. As regras confirmadas chegam por regras_alteradas."""
+        dialogo = LimitesDialogView(self.view)
+        LimitesDialogController(dialogo, self._repositorio_regras, self._banco)
+        dialogo.open()
 
     # ------------------------------------------------------------------
     # Disjuntor e atuação
