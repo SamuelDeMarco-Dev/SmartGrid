@@ -6,7 +6,9 @@ from time import monotonic
 from PyQt6.QtCore import QThread
 from serial import SerialException
 
-from tools.simulador_placa import PlacaVirtual
+from models import protocolo
+from models.protocolo import Comando, ErroProtocolo
+from tools.simulador_placa import TELEMETRIA, PlacaVirtual
 
 
 class PlacaEmMemoria(PlacaVirtual):
@@ -20,10 +22,51 @@ class PlacaEmMemoria(PlacaVirtual):
         self.silenciosa = False
         self.conexoes = []
         self.escritas = []
+        self.perder_rele = False
+        self.omitir_ack = False
+        self.ack_sem_atuar = False
+        self.ack_incorreto = False
+        self.silenciar_telemetria = False
+
+    def iniciar(self):
+        # Este transporte é temporizado pelos reads/writes, sem thread de pty.
+        return self
+
+    def parar(self):
+        self.arrancar_cabo()
 
     def _enviar(self, pacote: bytes) -> None:
-        if not self.silenciosa:
+        with self.condicao:
+            if self.silenciosa:
+                return
+            if self.omitir_ack or self.ack_incorreto:
+                try:
+                    mensagem = protocolo.interpretar(pacote)
+                except ErroProtocolo:
+                    pass  # A injeção de bytes corrompidos deve chegar ao worker.
+                else:
+                    if protocolo.e_ack(mensagem, "RELE") and len(mensagem.campos) == 2:
+                        if self.omitir_ack:
+                            return
+                        pacote = protocolo.ack("RELE", "0" if mensagem.campos[1] == "1" else "1")
             self.respostas.extend(pacote)
+            self.condicao.notify_all()
+
+    def _tratar(self, mensagem, agora):
+        if (
+            self.estado == TELEMETRIA and mensagem.comando is Comando.RELE
+            and mensagem.campos in (("0",), ("1",))
+        ):
+            if self.perder_rele:
+                return
+            if self.ack_sem_atuar:
+                self._enviar(protocolo.ack("RELE", *mensagem.campos))
+                return
+        super()._tratar(mensagem, agora)
+
+    def _enviar_telemetria(self):
+        if not self.silenciar_telemetria:
+            super()._enviar_telemetria()
 
     def injetar(self, pacote: bytes) -> None:
         with self.condicao:

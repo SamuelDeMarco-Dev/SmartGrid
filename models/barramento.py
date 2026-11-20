@@ -40,7 +40,8 @@ class Barramento(QObject):
     #: depois do COMMIT da sua própria transação).
     evento_persistido = pyqtSignal(Evento)
 
-    #: O disjuntor mudou de estado (por comando ou espontaneamente).
+    #: Intenção de corte/religamento persistida após COMMIT. Não confirma
+    #: atuação da placa; AplicacaoController publica a situação serial à parte.
     estado_disjuntor_alterado = pyqtSignal(EstadoDisjuntor)
 
     #: As regras de alerta foram salvas no diálogo de limites.

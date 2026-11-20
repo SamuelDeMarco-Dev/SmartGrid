@@ -67,7 +67,7 @@ def test_handshake_negocia_e_recebe_telemetria(app, placa):
         assert esperar(app, lambda: len(coletor.leituras) >= 3)
         assert coletor.velocidades == [38400]
         assert coletor.estados[:4] == ["ABRINDO_PORTA", "HANDSHAKE", "NEGOCIANDO", "TELEMETRIA"]
-        assert coletor.disjuntor == [EstadoDisjuntor.FECHADO]
+        assert coletor.disjuntor == [EstadoDisjuntor.FECHADO] * len(coletor.leituras)
         # O primeiro pacote enviado pelo desktop é o handshake.
         assert placa.pacotes_recebidos[0].comando is Comando.HS
     finally:

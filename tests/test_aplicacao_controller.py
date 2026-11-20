@@ -17,6 +17,7 @@ from models.repositorio_dispositivos import RepositorioDispositivos
 from models.repositorio_eventos import RepositorioEventos
 from models.repositorio_leituras import RepositorioLeituras
 from models.servico_corte import ServicoCorteEmergencial
+from models.situacao_disjuntor import ConfirmacaoDisjuntor
 from tools.simulador_placa import TELEMETRIA, PlacaVirtual
 
 
@@ -54,8 +55,7 @@ def aplicacao(app, tmp_path, monkeypatch):
 def _conectar(app, placa, aplicacao):
     aplicacao.conectar_serial(ParametrosConexao(placa.caminho, 115200, 500))
     assert esperar(app, lambda: placa.estado == TELEMETRIA)
-    # Ao entrar em telemetria o controller alinha o relé da placa ao banco.
-    assert esperar(app, lambda: any(m.comando is Comando.RELE for m in placa.pacotes_recebidos))
+    assert esperar(app, lambda: aplicacao.situacao_disjuntor.confirmacao is ConfirmacaoDisjuntor.CONFIRMADO)
 
 
 def _descricoes():

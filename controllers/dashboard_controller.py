@@ -4,8 +4,7 @@ Media a ``DashboardView`` e o Model:
 
     - telemetria do ``SerialWorker`` (via barramento) → indicadores e gráfico;
     - regra de proteção → ``models.avaliador_protecao``; a tela só pinta;
-    - corte/religamento → ``ServicoCorteEmergencial`` rodando no
-      ``DatabaseWorker`` (transação atômica fora da GUI);
+    - corte/religamento → ``AplicacaoController`` (persistência e confirmação);
     - gráfico em dois modos: **tempo real** (cada amostra acrescenta um ponto)
       e **histórico** (filtro → ``DatabaseWorker.consultar_leituras`` →
       replotagem quando o sinal ``leituras_consultadas`` chega).
@@ -31,7 +30,8 @@ from models.leitura import Leitura
 from models.regra_alerta import RegraAlerta
 from models.repositorio_leituras import FiltroLeituras
 from models.repositorio_regras import RepositorioRegras
-from models.servico_corte import FalhaCorteEmergencial, ServicoCorteEmergencial
+from models.servico_corte import ServicoCorteEmergencial
+from models.situacao_disjuntor import SituacaoDisjuntor
 from views import dashboard_view as cores
 from views.dashboard_view import DashboardView
 from views.limites_dialog_view import LimitesDialogView
@@ -67,17 +67,18 @@ class DashboardController(QObject):
         self._banco = aplicacao.banco
 
         self.estado_disjuntor = aplicacao.estado_disjuntor
+        self._situacao_disjuntor = aplicacao.situacao_disjuntor
         self.leitura_atual = Leitura.zerada()
         self._avaliador = AvaliadorProtecao(setpoint_w=self.view.setpoint())
-        self._conectado = False
-        self._corte_em_andamento = False
+        self._conectado = self.estado_disjuntor is not None
+        self._confirmando = False
         self._filtro_precarga = FiltroLeituras.ultimas_n(self.LEITURAS_PRECARGA)
         self._filtro_historico: FiltroLeituras | None = None
 
         self._conectar_view()
         self._conectar_modelo()
 
-        self.view.mostrar_disjuntor(self.estado_disjuntor)
+        self.view.mostrar_situacao_disjuntor(self._situacao_disjuntor)
         self.view.mostrar_leitura(0.0, 0.0, 0.0)
         self._atualizar_aquisicao("")
         self._atualizar_resumo_regras()
@@ -106,10 +107,12 @@ class DashboardController(QObject):
         barramento.leitura_recebida.connect(self._ao_nova_amostra)
         barramento.status_conexao_alterado.connect(self._ao_status_conexao)
         barramento.regras_alteradas.connect(self._aplicar_regras)
-        barramento.estado_disjuntor_alterado.connect(self._ao_estado_alterado)
+        self._aplicacao.situacao_disjuntor_alterada.connect(self._ao_estado_alterado)
+        self._aplicacao.operacao_falhou.connect(self._ao_falha_operacao)
         self._banco.leituras_consultadas.connect(self._ao_leituras_consultadas)
         self._banco.consulta_falhou.connect(self._ao_consulta_falhou)
         self._aplicacao.disparo_espontaneo.connect(self._ao_disparo_espontaneo)
+        self._aplicacao.disparo_simulado.connect(self._ao_disparo_simulado)
 
     # ------------------------------------------------------------------
     # Telemetria e proteção
@@ -162,11 +165,21 @@ class DashboardController(QObject):
 
     def _atualizar_comandos(self) -> None:
         """Comandos só fazem sentido com o microcontrolador do outro lado."""
-        livre = self._conectado and not self._corte_em_andamento
+        livre = (
+            self._conectado and self.estado_disjuntor is not None
+            and not self._aplicacao.comando_pendente and not self._confirmando
+        )
+        dica = ""
+        if not self._conectado:
+            dica = "Conecte a porta serial para atuar na carga."
+        elif self.estado_disjuntor is None:
+            dica = "Aguarde telemetria válida da placa."
+        elif self._aplicacao.comando_pendente:
+            dica = "Aguarde a confirmação do comando pendente."
         self.view.habilitar_comandos(
             corte=livre,
-            disparo=livre and self.estado_disjuntor.energizado,
-            dica="" if self._conectado else "Conecte a porta serial para atuar na carga.",
+            disparo=livre and self.estado_disjuntor is EstadoDisjuntor.FECHADO,
+            dica=dica,
         )
 
     # ------------------------------------------------------------------
@@ -240,53 +253,44 @@ class DashboardController(QObject):
     # ------------------------------------------------------------------
     def alternar_carga(self) -> None:
         """Corte de emergência (ou religamento), sempre sob confirmação."""
+        if (
+            not self._conectado or self.estado_disjuntor is None
+            or self._aplicacao.comando_pendente or self._confirmando
+        ):
+            return
+        destino = self.estado_disjuntor.alternado()
         if self.estado_disjuntor.energizado:
             titulo = "Corte de emergência"
             pergunta = (
                 "Confirmar o CORTE DE EMERGÊNCIA da carga?\n\n"
-                "O comando RELAY_OFF será enviado e a instalação ficará desenergizada."
+                "O comando RELE,0 será enviado. Aguarde a confirmação pela telemetria."
             )
         else:
             titulo = "Religar carga"
-            pergunta = "Confirmar o religamento da carga?\n\nA instalação voltará a ser energizada."
+            pergunta = "Confirmar o religamento da carga?\n\nAguarde a confirmação pela telemetria."
 
-        if not self.view.confirmar(titulo, pergunta):
-            return
-
-        # A transação roda no DatabaseWorker; após o COMMIT o serviço emite
-        # `estado_disjuntor_alterado`, que atualiza o badge e envia o RELE à placa.
-        self._corte_em_andamento = True
+        self._confirmando = True
         self._atualizar_comandos()
-        self._banco.executar(
-            self._servico_corte.executar,
-            self.estado_disjuntor.alternado(),
-            self.leitura_atual.resumo(),
-            ao_concluir=lambda _evento: self._finalizar_corte(),
-            ao_falhar=lambda erro: self._falhar_corte(titulo, erro),
-        )
-
-    def _finalizar_corte(self) -> None:
-        self._corte_em_andamento = False
-        self._atualizar_comandos()
-
-    def _falhar_corte(self, titulo: str, erro: Exception) -> None:
-        self._finalizar_corte()
-        if isinstance(erro, FalhaCorteEmergencial):
-            mensagem = (
-                "A operação não foi concluída e foi desfeita (rollback).\n"
-                "O estado do disjuntor permanece inalterado.\n\n"
-                f"Motivo: {erro}"
-            )
-        else:
-            logger.error("Erro inesperado no corte de emergência: %s", erro)
-            mensagem = f"Erro inesperado ao executar o comando.\n\nMotivo: {erro}"
-        self.view.avisar_erro(titulo, mensagem)
-
-    def _ao_estado_alterado(self, estado: EstadoDisjuntor) -> None:
-        if estado is self.estado_disjuntor:
+        try:
+            confirmado = self.view.confirmar(titulo, pergunta)
+        finally:
+            self._confirmando = False
+            self._atualizar_comandos()
+        if not confirmado:
             return
-        self.estado_disjuntor = estado
-        self.view.mostrar_disjuntor(estado)
+        # O diálogo tem seu próprio event loop: D2 ou a conexão podem ter
+        # mudado enquanto o operador decidia. Não reaproveita a confirmação.
+        if self.estado_disjuntor is None or destino is not self.estado_disjuntor.alternado():
+            return
+        self._aplicacao.solicitar_estado_disjuntor(destino, self.leitura_atual.resumo())
+
+    def _ao_falha_operacao(self, mensagem: str) -> None:
+        self.view.avisar_erro("Atuação sem confirmação", mensagem)
+
+    def _ao_estado_alterado(self, situacao: SituacaoDisjuntor) -> None:
+        self._situacao_disjuntor = situacao
+        self.estado_disjuntor = situacao.reportado
+        self.view.mostrar_situacao_disjuntor(situacao)
         self._atualizar_comandos()
 
     def _ao_disparo_espontaneo(self, erro_gravacao: str) -> None:
@@ -302,3 +306,14 @@ class DashboardController(QObject):
             "Proteção atuada",
             "O disjuntor abriu espontaneamente.\n\nVerifique a instalação antes de religar a carga.",
         )
+
+    def _ao_disparo_simulado(self, erro_gravacao: str) -> None:
+        if erro_gravacao:
+            self.view.avisar_erro("Falha de registro", f"Falha ao registrar a simulação: {erro_gravacao}")
+            return
+        mensagem = (
+            "A placa confirmou ABERTO pela telemetria. O religamento exige ação manual."
+            if self.estado_disjuntor is EstadoDisjuntor.ABERTO else
+            "Simulação registrada. O estado da placa é desconhecido sem telemetria válida."
+        )
+        self.view.avisar("Disparo simulado", mensagem)

@@ -8,8 +8,8 @@ Dentro de UMA transação SQLite:
 
 Se qualquer passo falhar, ``Database.transacao()`` faz ROLLBACK: os
 dispositivos voltam ao estado anterior e nenhum evento é gravado. Só depois do
-COMMIT o serviço avisa o restante da aplicação pelo barramento — a UI nunca
-mostra um estado que não está no banco.
+COMMIT o serviço avisa a intenção persistida pelo barramento. A confirmação
+da placa é independente e coordenada pelo AplicacaoController.
 
 Uso (no ``main.py``):
 
@@ -34,7 +34,7 @@ class FalhaCorteEmergencial(Exception):
 
 
 class ServicoCorteEmergencial:
-    """Abre ou fecha disjuntor e relé registrando o comando na mesma transação."""
+    """Persiste a intenção de corte/religamento e o evento na mesma transação."""
 
     TAG_DISJUNTOR = "DISJ-01"
     TAG_RELE = "RELE-01"
@@ -51,12 +51,12 @@ class ServicoCorteEmergencial:
         self.simular_falha = simular_falha
 
     def estado_atual(self) -> EstadoDisjuntor:
-        """Estado do disjuntor gravado no banco (usado ao abrir o dashboard)."""
+        """Intenção gravada no banco; não representa confirmação serial."""
         linha = self._repo_dispositivos.obter_por_tag(self.TAG_DISJUNTOR)
         return EstadoDisjuntor[linha["status"]]
 
     def executar(self, destino: EstadoDisjuntor, valor_medido: str = "") -> Evento:
-        """Leva disjuntor e relé ao estado ``destino`` de forma atômica.
+        """Persiste o destino de disjuntor e relé em uma transação SQLite.
 
         Levanta ``FalhaCorteEmergencial`` se a transação for desfeita.
         """
@@ -75,22 +75,23 @@ class ServicoCorteEmergencial:
             )
             raise FalhaCorteEmergencial(str(erro)) from erro
 
-        logger.info("%s — disjuntor e relé em %s.", evento.descricao, status)
+        logger.info("%s — intenção %s persistida; aguardando a placa.", evento.descricao, status)
         barramento.evento_persistido.emit(evento)
         barramento.estado_disjuntor_alterado.emit(destino)
         return evento
 
-    def registrar_disparo_espontaneo(self, valor_medido: str = "") -> Evento:
+    def registrar_disparo_espontaneo(self, valor_medido: str = "", *, simulado: bool = False) -> Evento:
         """Grava a abertura do disjuntor pelo hardware e o alerta correspondente.
 
         Diferente do corte, aqui o estado físico JÁ mudou: o serviço apenas
         alinha o banco à realidade, atomicamente. Não emite
-        ``estado_disjuntor_alterado`` (quem detectou o disparo já o fez).
+        ``estado_disjuntor_alterado``, pois não é uma solicitação de comando.
         Levanta ``sqlite3.Error``/``LookupError`` se a gravação falhar.
         """
         evento = Evento.agora(
             TipoEvento.ALERTA,
-            "Disjuntor abriu espontaneamente — proteção atuada no hardware",
+            "Disparo simulado — intenção de abertura registrada sem confirmação serial"
+            if simulado else "Disjuntor abriu espontaneamente — proteção atuada no hardware",
             valor_medido,
         )
 
