@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import QPushButton
 
 from models import protocolo
 from models.barramento import barramento
+from models.estado_disjuntor import EstadoDisjuntor
 from models.estado_link import EstadoLink
 from models.porta_serial import ParametrosConexao
 from models.serial_worker import SerialWorker
@@ -135,16 +136,26 @@ def test_ack_rele_valido_e_confirmado_sem_descarte(
     placa = serial_simulada()
     caplog.set_level(logging.INFO, logger="smartgrid")
     worker, leituras = conectar(placa)
-    aguardar_qt(lambda: "Placa confirmou o comando RELE,1." in caplog.messages)
     perdas = QSignalSpy(worker.link_perdido)
+    confirmacoes = QSignalSpy(worker.rele_confirmado)
+    falhas = QSignalSpy(worker.rele_falhou)
     total = worker.pacotes_descartados
     caplog.clear()
 
-    placa.injetar(protocolo.ack("RELE", estado))
-    placa.injetar(protocolo.telemetria(999, 987.6, 0.1, True))
+    # Sem RELE,1 automático na conexão. Exercita um comando explícito e
+    # verifica que o ACK correto aguarda a confirmação pela telemetria.
+    placa.silenciar_telemetria = True
+    fechado = estado == "1"
+    assert worker.enviar_rele(fechado)
+    aguardar_qt(lambda: worker._pedido_rele is not None and worker._pedido_rele.ack)
+    assert len(confirmacoes) == 0
+    placa.injetar(protocolo.telemetria(999, 987.6, 0.1, fechado))
     aguardar_qt(lambda: any(args[0].tensao == 987.6 for args in leituras))
+    aguardar_qt(lambda: len(confirmacoes) == 1)
 
-    assert f"Placa confirmou o comando RELE,{estado}." in caplog.messages
+    destino = EstadoDisjuntor.FECHADO if fechado else EstadoDisjuntor.ABERTO
+    assert list(confirmacoes) == [[destino]]
+    assert len(falhas) == 0
     assert worker.pacotes_descartados == total
     assert worker.isRunning() and len(perdas) == 0
 
@@ -156,8 +167,8 @@ def test_ack_rele_invalido_e_contabilizado_sem_perder_link(
     placa = serial_simulada()
     caplog.set_level(logging.INFO, logger="smartgrid")
     worker, leituras = conectar(placa)
-    aguardar_qt(lambda: "Placa confirmou o comando RELE,1." in caplog.messages)
     perdas = QSignalSpy(worker.link_perdido)
+    confirmacoes = QSignalSpy(worker.rele_confirmado)
     total = worker.pacotes_descartados
     caplog.clear()
     placa.injetar(protocolo.ack("RELE", *campos))
@@ -172,8 +183,7 @@ def test_ack_rele_invalido_e_contabilizado_sem_perder_link(
         registro.levelno == logging.WARNING and "Pacote serial descartado" in registro.message
         for registro in caplog.records
     )
-    for estado in ("0", "1"):
-        assert f"Placa confirmou o comando RELE,{estado}." not in caplog.messages
+    assert len(confirmacoes) == 0
 
 
 def test_ack_rele_com_checksum_invalido_nao_e_confirmado(
@@ -182,8 +192,8 @@ def test_ack_rele_com_checksum_invalido_nao_e_confirmado(
     placa = serial_simulada()
     caplog.set_level(logging.INFO, logger="smartgrid")
     worker, leituras = conectar(placa)
-    aguardar_qt(lambda: "Placa confirmou o comando RELE,1." in caplog.messages)
     perdas = QSignalSpy(worker.link_perdido)
+    confirmacoes = QSignalSpy(worker.rele_confirmado)
     total = worker.pacotes_descartados
     caplog.clear()
     corpo, checksum = protocolo.ack("RELE", "0").rsplit(b"*", 1)
@@ -194,7 +204,7 @@ def test_ack_rele_com_checksum_invalido_nao_e_confirmado(
     aguardar_qt(lambda: any(args[0].tensao == 987.6 for args in leituras))
 
     assert worker.pacotes_descartados == total + 1
-    assert "Placa confirmou o comando RELE,0." not in caplog.messages
+    assert len(confirmacoes) == 0
     assert any(
         registro.levelno == logging.WARNING and "Checksum inválido" in registro.message
         for registro in caplog.records

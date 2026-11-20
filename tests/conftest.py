@@ -112,3 +112,9 @@ def serial_simulada(monkeypatch):
                     abertas.append(conexao)
                     conexao.close()
         assert not abertas, "Uma porta simulada ficou aberta após o teste"
+
+
+@pytest.fixture
+def serial_memoria(serial_simulada):
+    """Nome usado pelo D01, com o mesmo transporte e limpeza dos testes da #64."""
+    return serial_simulada

@@ -20,6 +20,8 @@ from models.repositorio_eventos import RepositorioEventos
 from models.repositorio_leituras import RepositorioLeituras
 from models.repositorio_regras import RepositorioRegras
 from models.servico_corte import ServicoCorteEmergencial
+from models.porta_serial import ParametrosConexao
+from models.situacao_disjuntor import ConfirmacaoDisjuntor
 
 
 def esperar(app, condicao, prazo=5.0):
@@ -76,12 +78,15 @@ def test_regra_de_tensao_e_setpoint_das_regras():
 # Controller + View
 # ----------------------------------------------------------------------
 @pytest.fixture
-def ambiente(app, tmp_path, monkeypatch):
+def ambiente(app, tmp_path, monkeypatch, serial_memoria):
     monkeypatch.setattr(modulo_conexao, "CAMINHO_DB", tmp_path / "smartgrid.db")
     Database.init_db()
     servico = ServicoCorteEmergencial(RepositorioDispositivos(), RepositorioEventos())
     aplicacao = AplicacaoController(Configuracao(), servico)
     dashboard = DashboardController(servico, RepositorioRegras(), aplicacao)
+    pronto = []
+    aplicacao.banco.executar(lambda: None, ao_concluir=pronto.append)
+    assert esperar(app, lambda: pronto)
     yield dashboard, aplicacao
     aplicacao.encerrar()
     for sinal, slot in (
@@ -90,7 +95,7 @@ def ambiente(app, tmp_path, monkeypatch):
         (barramento.leitura_recebida, dashboard._ao_nova_amostra),
         (barramento.status_conexao_alterado, dashboard._ao_status_conexao),
         (barramento.regras_alteradas, dashboard._aplicar_regras),
-        (barramento.estado_disjuntor_alterado, dashboard._ao_estado_alterado),
+        (aplicacao.situacao_disjuntor_alterada, dashboard._ao_estado_alterado),
     ):
         sinal.disconnect(slot)
 
@@ -151,24 +156,34 @@ def test_intervalo_invertido_avisa(app, ambiente, monkeypatch):
     assert avisos and "anterior" in avisos[0]
 
 
-def test_corte_roda_no_worker_e_atualiza_o_badge(app, ambiente, monkeypatch):
-    dashboard, _ = ambiente
+def _conectar(app, aplicacao, serial_memoria):
+    placa = serial_memoria().iniciar()
+    aplicacao._config = Configuracao(taxa_amostragem_ms=100)
+    aplicacao.conectar_serial(ParametrosConexao(placa.caminho, 115200, 500))
+    assert esperar(app, lambda: aplicacao.estado_disjuntor is EstadoDisjuntor.FECHADO)
+    return placa
+
+
+def test_corte_roda_no_worker_e_atualiza_o_badge(app, ambiente, monkeypatch, serial_memoria):
+    dashboard, aplicacao = ambiente
     monkeypatch.setattr(dashboard.view, "confirmar", lambda _t, _p: True)
-    barramento.status_conexao_alterado.emit(True, "teste")
+    _conectar(app, aplicacao, serial_memoria)
 
     dashboard.alternar_carga()
 
     assert esperar(app, lambda: dashboard.estado_disjuntor is EstadoDisjuntor.ABERTO)
     assert "ABERTO" in dashboard.view.labelBadgeDisjuntor.text()
+    assert esperar(app, lambda: aplicacao.situacao_disjuntor.confirmacao is ConfirmacaoDisjuntor.CONFIRMADO)
     assert RepositorioDispositivos().obter_por_tag("DISJ-01")["status"] == "ABERTO"
 
 
-def test_corte_com_falha_simulada_avisa_rollback(app, ambiente, monkeypatch):
-    dashboard, _ = ambiente
+def test_corte_com_falha_simulada_avisa_rollback(app, ambiente, monkeypatch, serial_memoria):
+    dashboard, aplicacao = ambiente
     erros = []
     monkeypatch.setattr(dashboard.view, "confirmar", lambda _t, _p: True)
     monkeypatch.setattr(dashboard.view, "avisar_erro", lambda _t, msg: erros.append(msg))
     dashboard._servico_corte.simular_falha = True
+    _conectar(app, aplicacao, serial_memoria)
 
     dashboard.alternar_carga()
 
@@ -184,5 +199,7 @@ def test_disparo_simulado_avisa_operador(app, ambiente, monkeypatch):
 
     dashboard.view.disparo_simulado_solicitado.emit()
 
-    assert esperar(app, lambda: avisos == ["Proteção atuada"])
-    assert dashboard.estado_disjuntor is EstadoDisjuntor.ABERTO
+    assert esperar(app, lambda: avisos == ["Disparo simulado"])
+    assert dashboard.estado_disjuntor is None
+    assert "DESCONHECIDO" in dashboard.view.labelBadgeDisjuntor.text()
+    assert RepositorioDispositivos().obter_por_tag("DISJ-01")["status"] == "ABERTO"

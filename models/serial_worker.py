@@ -12,7 +12,10 @@ aplicação só enxerga sinais, entregues na thread de quem os escuta
 ``leitura_recebida(Leitura)``
     Cada pacote ``TLM`` válido.
 ``disjuntor_reportado(EstadoDisjuntor)``
-    Estado do disjuntor informado pela placa, só quando muda.
+    Estado de cada telemetria válida, inclusive quando não muda.
+``rele_confirmado(EstadoDisjuntor)`` / ``rele_falhou(EstadoDisjuntor, str)``
+    Resultado único por comando. ACK sozinho não confirma a atuação:
+    é necessário receber telemetria posterior compatível.
 ``link_perdido(str)``
     Cabo arrancado, erro de I/O ou placa em silêncio. A thread termina.
 
@@ -30,7 +33,9 @@ from __future__ import annotations
 
 import logging
 import queue
+import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime
 
 import serial
@@ -49,6 +54,14 @@ class ErroLink(Exception):
     """A placa não respondeu como o protocolo exige."""
 
 
+@dataclass(slots=True)
+class _PedidoRele:
+    destino: EstadoDisjuntor
+    prazo: float | None = None
+    ack: bool = False
+    reportado: EstadoDisjuntor | None = None
+
+
 class SerialWorker(QThread):
     """Dono exclusivo da porta serial durante uma conexão."""
 
@@ -56,6 +69,8 @@ class SerialWorker(QThread):
     velocidade_negociada = pyqtSignal(int)
     leitura_recebida = pyqtSignal(Leitura)
     disjuntor_reportado = pyqtSignal(EstadoDisjuntor)
+    rele_confirmado = pyqtSignal(EstadoDisjuntor)
+    rele_falhou = pyqtSignal(EstadoDisjuntor, str)
     link_perdido = pyqtSignal(str)
 
     #: Timeout de cada ``read``: limita a demora para perceber ``parar()``.
@@ -90,21 +105,33 @@ class SerialWorker(QThread):
         self.intervalo_ms = intervalo_ms
         #: Silêncio tolerado na telemetria antes de declarar o link perdido.
         self.limite_silencio_s = 3 * intervalo_ms / 1000 + timeout_ms / 1000
+        self.prazo_confirmacao_s = max(1.0, 2 * intervalo_ms / 1000 + timeout_ms / 1000)
         #: Depois de um ``SYNC`` sem resposta, quanto esperar a placa voltar a 9600.
         self.espera_retorno_placa_s = protocolo.TEMPO_SYNC_S + 0.2
 
         self._serial: serial.Serial | None = None
         self._buffer = b""
-        self._comandos: queue.SimpleQueue[bytes] = queue.SimpleQueue()
+        self._comandos: queue.SimpleQueue[_PedidoRele] = queue.SimpleQueue()
+        self._trava_rele = threading.Lock()
+        self._pedido_rele: _PedidoRele | None = None
         self._disjuntor: EstadoDisjuntor | None = None
         self.pacotes_descartados = 0
 
     # ------------------------------------------------------------------
     # API usada pela thread da GUI (thread-safe)
     # ------------------------------------------------------------------
-    def enviar_rele(self, fechado: bool) -> None:
-        """Enfileira ``RELE,1`` (religar) ou ``RELE,0`` (corte) para a placa."""
-        self._comandos.put(protocolo.rele(fechado))
+    def enviar_rele(self, fechado: bool) -> bool:
+        """Reserva um único comando; recusa cliques repetidos ou contraditórios.
+
+        Não há retransmissão automática, especialmente de religamento.
+        """
+        with self._trava_rele:
+            if self._pedido_rele is not None or self.isInterruptionRequested():
+                return False
+            pedido = _PedidoRele(EstadoDisjuntor.FECHADO if fechado else EstadoDisjuntor.ABERTO)
+            self._pedido_rele = pedido
+            self._comandos.put(pedido)
+        return True
 
     def parar(self) -> None:
         """Pede o encerramento cooperativo; não bloqueia."""
@@ -121,6 +148,7 @@ class SerialWorker(QThread):
             self.velocidade_negociada.emit(baud)
             self._receber_telemetria()
         except (serial.SerialException, OSError, ErroLink) as erro:
+            self._concluir_rele(str(erro) or "Comunicação serial interrompida.")
             if not self.isInterruptionRequested():
                 motivo = str(erro) or erro.__class__.__name__
                 logger.error("Link serial perdido em %s: %s", self.porta, motivo)
@@ -129,9 +157,11 @@ class SerialWorker(QThread):
         except Exception as erro:
             # Exceção solta em run() mataria a thread sem aviso nenhum.
             logger.exception("Erro inesperado na thread serial: %s", erro)
+            self._concluir_rele(f"Erro na comunicação serial: {erro}")
             self._mudar_estado(EstadoLink.LINK_PERDIDO, f"Erro inesperado: {erro}")
             self.link_perdido.emit(str(erro))
         finally:
+            self._concluir_rele("Comunicação serial encerrada antes da confirmação.")
             self._fechar()
 
     def _abrir(self) -> None:
@@ -243,37 +273,91 @@ class SerialWorker(QThread):
             if agora >= proximo_ping:
                 self._serial.write(protocolo.ping())
                 proximo_ping = agora + protocolo.PERIODO_PING_S
-            while not self._comandos.empty():
-                self._serial.write(self._comandos.get())
-
+            # Processa primeiro o que já chegou. Uma amostra que estava no
+            # buffer antes do envio não deve confirmar o próximo comando.
             for mensagem in self._ler_mensagens():
                 if mensagem.comando is Comando.TLM:
-                    self._tratar_telemetria(mensagem)
+                    if self._tratar_telemetria(mensagem):
+                        ultimo_pacote = time.monotonic()
                 elif protocolo.e_ack(mensagem, Comando.RELE.value):
-                    if len(mensagem.campos) != 2 or mensagem.campos[1] not in ("0", "1"):
-                        self._descartar(ErroProtocolo("ACK de RELE deve conter somente o estado 0 ou 1."))
-                        continue
-                    logger.info("Placa confirmou o comando RELE,%s.", mensagem.campos[1])
-                ultimo_pacote = time.monotonic()
+                    self._tratar_ack_rele(mensagem)
 
+            self._verificar_prazo_rele()
             silencio = time.monotonic() - ultimo_pacote
             if silencio > self.limite_silencio_s:
                 raise ErroLink(f"Placa sem resposta há {silencio:.1f} s.")
+            if not self.isInterruptionRequested():
+                try:
+                    pedido = self._comandos.get_nowait()
+                except queue.Empty:
+                    pass
+                else:
+                    # Fragmentos iniciados antes do comando não podem ser
+                    # completados depois e usados como sua confirmação.
+                    self._buffer = b""
+                    self._serial.write(protocolo.rele(pedido.destino.energizado))
+                    pedido.prazo = time.monotonic() + self.prazo_confirmacao_s
 
-    def _tratar_telemetria(self, mensagem: protocolo.Mensagem) -> None:
+    def _tratar_telemetria(self, mensagem: protocolo.Mensagem) -> bool:
         try:
             tlm = protocolo.decodificar_telemetria(mensagem)
         except ErroProtocolo as erro:
             self._descartar(erro)
-            return
+            return False
 
         self.leitura_recebida.emit(
             Leitura(instante=datetime.now(), tensao=tlm.tensao, corrente=tlm.corrente)
         )
         estado = EstadoDisjuntor.FECHADO if tlm.disjuntor_fechado else EstadoDisjuntor.ABERTO
-        if estado is not self._disjuntor:
-            self._disjuntor = estado
-            self.disjuntor_reportado.emit(estado)
+        self._disjuntor = estado
+        self.disjuntor_reportado.emit(estado)
+        pedido = self._pedido_rele
+        if pedido is not None and pedido.prazo is not None:
+            pedido.reportado = estado
+            if time.monotonic() >= pedido.prazo:
+                self._verificar_prazo_rele()
+            elif estado is pedido.destino:
+                self._concluir_rele()
+            elif pedido.ack:
+                self._concluir_rele(
+                    f"A placa aceitou {pedido.destino.name}, mas a telemetria "
+                    f"posterior reportou {estado.name}."
+                )
+        return True
+
+    def _tratar_ack_rele(self, mensagem: protocolo.Mensagem) -> None:
+        if len(mensagem.campos) != 2 or mensagem.campos[1] not in ("0", "1"):
+            self._descartar(ErroProtocolo("ACK de RELE inválido."))
+            return
+        pedido = self._pedido_rele
+        if pedido is None or pedido.prazo is None:
+            return  # ACK atrasado ou sem comando correspondente
+        if mensagem.campos[1] != ("1" if pedido.destino.energizado else "0"):
+            logger.warning("ACK de RELE não corresponde ao comando pendente.")
+            return
+        pedido.ack = True
+
+    def _verificar_prazo_rele(self) -> None:
+        pedido = self._pedido_rele
+        if pedido is None or pedido.prazo is None or time.monotonic() < pedido.prazo:
+            return
+        reportado = pedido.reportado.name if pedido.reportado is not None else "DESCONHECIDO"
+        self._concluir_rele(
+            f"Tempo de confirmação esgotado para {pedido.destino.name}. "
+            f"Estado reportado após o envio: {reportado}."
+        )
+
+    def _concluir_rele(self, erro: str = "") -> None:
+        with self._trava_rele:
+            pedido = self._pedido_rele
+            if pedido is None:
+                return
+            self._pedido_rele = None
+        if erro:
+            logger.warning("Comando RELE sem confirmação: %s", erro)
+            self.rele_falhou.emit(pedido.destino, erro)
+        else:
+            self.rele_confirmado.emit(pedido.destino)
 
     # ------------------------------------------------------------------
     # Leitura de bytes
