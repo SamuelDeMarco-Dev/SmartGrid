@@ -14,11 +14,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from models.protocolo import VELOCIDADES
+from models.protocolo import INTERVALO_MAXIMO_MS, INTERVALO_MINIMO_MS, VELOCIDADES
 
 #: Velocidades oferecidas na tela — as quatro que a placa negocia. A conexão
 #: sempre começa em 9600 bps; o valor escolhido é a velocidade ALVO do handshake.
 BAUD_RATES = VELOCIDADES
+
+#: Faixa da taxa de amostragem (período da telemetria pedido no handshake).
+TAXA_AMOSTRAGEM_MINIMA_MS = INTERVALO_MINIMO_MS
+TAXA_AMOSTRAGEM_MAXIMA_MS = INTERVALO_MAXIMO_MS
 
 BAUD_RATE_PADRAO = 115200
 
@@ -160,6 +164,17 @@ class PortaSerial:
     # ------------------------------------------------------------------
     # Validações
     # ------------------------------------------------------------------
+    @staticmethod
+    def validar_taxa_amostragem(taxa_ms: int) -> int:
+        """Confere o período da telemetria pedido à placa no handshake."""
+        if not TAXA_AMOSTRAGEM_MINIMA_MS <= taxa_ms <= TAXA_AMOSTRAGEM_MAXIMA_MS:
+            raise ErroConexaoSerial(
+                f"Taxa de amostragem inválida: {taxa_ms} ms. "
+                f"Informe um valor entre {TAXA_AMOSTRAGEM_MINIMA_MS} e "
+                f"{TAXA_AMOSTRAGEM_MAXIMA_MS} ms."
+            )
+        return taxa_ms
+
     @staticmethod
     def _validar_porta(porta: str) -> str:
         porta = (porta or "").strip()

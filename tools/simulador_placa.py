@@ -76,7 +76,12 @@ class PlacaVirtual:
     def criar(cls, **opcoes) -> "PlacaVirtual":
         """Abre um par pty e devolve a placa; o desktop usa ``placa.caminho``."""
         if os.name != "posix":
-            raise OSError("O simulador de pseudoterminal requer Linux/macOS (POSIX).")
+            raise OSError(
+                "O simulador de pseudoterminal requer Linux/macOS (POSIX)."
+            )
+
+        # Importado aqui: ``tty`` só existe em macOS/Linux, e os testes usam a
+        # máquina de estados (PlacaEmMemoria) também no Windows.
         import tty
 
         mestre, escravo = os.openpty()

@@ -184,9 +184,12 @@ class DashboardView(QWidget, Ui_Dashboard):
         return self.radioTempoReal.isChecked()
 
     def plotar_tempo_real(self, instantes: list[float], potencias: list[float]) -> None:
-        """Substitui o buffer de tempo real (pré-carga com as últimas leituras)."""
-        self._instantes = list(instantes[-self.MAXIMO_PONTOS:])
-        self._potencias = list(potencias[-self.MAXIMO_PONTOS:])
+        """Pré-carrega o histórico preservando amostras recebidas durante a consulta."""
+        pontos = dict(zip(instantes, potencias))
+        pontos.update(zip(self._instantes, self._potencias))
+        recentes = sorted(pontos.items())[-self.MAXIMO_PONTOS:]
+        self._instantes = [instante for instante, _ in recentes]
+        self._potencias = [potencia for _, potencia in recentes]
         if self.em_tempo_real():
             self._redesenhar_tempo_real()
 

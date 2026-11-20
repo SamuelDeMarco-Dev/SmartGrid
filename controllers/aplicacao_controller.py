@@ -15,6 +15,8 @@ Fiação
   e ``DatabaseWorker.gravar_leitura`` (histórico).
 - ``SerialWorker.estado_alterado`` → ``barramento.estado_link_alterado`` e
   ``status_conexao_alterado``; conexão, encerramento e queda viram eventos.
+- ``SerialWorker.velocidade_negociada`` → ``velocidade_negociada`` deste
+  controller (tela de comunicação serial).
 - ``barramento.evento_registrado`` → ``DatabaseWorker.gravar_evento``, que
   confirma com ``evento_persistido`` depois do COMMIT.
 - Corte/religamento confirmado no banco (``estado_disjuntor_alterado``) →
@@ -54,6 +56,10 @@ class AplicacaoController(QObject):
     #: Disjuntor aberto pela proteção da placa, já refletido no banco quando
     #: possível. Carrega a mensagem de erro de gravação ("" se gravou).
     disparo_espontaneo = pyqtSignal(str)
+
+    #: Velocidade (bps) que a placa confirmou no SYNC; repassada do SerialWorker
+    #: para a tela de comunicação serial.
+    velocidade_negociada = pyqtSignal(int)
 
     #: Tempo máximo esperando cada thread no encerramento.
     ESPERA_ENCERRAMENTO_MS = 3000
@@ -107,6 +113,7 @@ class AplicacaoController(QObject):
             parent=self,
         )
         worker.estado_alterado.connect(self._ao_estado_link)
+        worker.velocidade_negociada.connect(self.velocidade_negociada)
         worker.leitura_recebida.connect(self._ao_leitura)
         worker.disjuntor_reportado.connect(self._ao_disjuntor_reportado)
         worker.finished.connect(self._ao_serial_encerrada)
