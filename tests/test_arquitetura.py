@@ -9,7 +9,6 @@ from PyQt6.QtWidgets import QDialogButtonBox
 
 import models.config_manager as modulo_config
 from controllers.main_window_controller import MainWindowController
-from controllers.serial_config_controller import SerialConfigController
 from database.connection import Database
 from main import _montar_telas
 from models.config_manager import ConfigManager, Configuracao
@@ -18,6 +17,7 @@ from models.repositorio_regras import RepositorioRegras
 from views.dashboard_view import DashboardView
 from views.historico_view import HistoricoView
 from views.limites_dialog_view import LimitesDialogView
+from views.serial_config_view import SerialConfigView
 
 RAIZ = Path(__file__).resolve().parents[1]
 DRIVERS = ("sqlite3", "serial", "database")
@@ -97,7 +97,7 @@ def test_telas_delegam_consultas_descoberta_serial_e_gravacao_do_json(
         _montar_telas(janela, aplicacao_teste._servico_corte, RepositorioRegras(), config, aplicacao_teste)
         dashboard = janela.view.findChild(DashboardView)
         historico = janela.view.findChild(HistoricoView)
-        painel_serial = janela.view.findChild(SerialConfigController)
+        painel_serial = janela.view.findChild(SerialConfigView)
         aguardar_qt(lambda: painel_serial.botaoConectar.isEnabled())
         janela.ir_para("historico")
         aguardar_qt(lambda: historico.botaoAtualizarHistorico.isEnabled())
