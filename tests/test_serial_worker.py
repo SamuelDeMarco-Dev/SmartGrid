@@ -1,5 +1,6 @@
 """SerialWorker contra a placa virtual (issue #57)."""
 
+import os
 import time
 
 import pytest
@@ -40,6 +41,8 @@ class Coletor:
 
 @pytest.fixture
 def placa():
+    if os.name != "posix":
+        pytest.skip("Integração com pseudoterminal real requer POSIX (os.openpty e tty).")
     placa = PlacaVirtual.criar(tempo_sync_s=0.3).iniciar()
     yield placa
     placa.parar()
@@ -107,6 +110,7 @@ def test_disparo_na_placa_e_reportado(app, placa):
         _encerrar(app, worker)
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Pseudoterminal real requer POSIX (os.openpty e tty).")
 def test_sync_falho_cai_para_a_velocidade_menor(app):
     placa = PlacaVirtual.criar(tempo_sync_s=0.3, falhar_sync_em=(115200,)).iniciar()
     worker, coletor = _worker(placa, baud=115200)

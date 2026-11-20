@@ -111,7 +111,12 @@ def test_amostra_atualiza_indicadores_e_curva_de_tempo_real(app, ambiente):
 
 
 def test_consulta_historica_replota_sem_bloquear(app, ambiente):
-    dashboard, _ = ambiente
+    dashboard, aplicacao = ambiente
+    # A pré-carga precisa terminar antes de inserir as amostras destinadas
+    # apenas à consulta histórica; a ordem de execução das threads varia.
+    precarga_concluida = []
+    aplicacao.banco.executar(lambda: True, ao_concluir=precarga_concluida.append)
+    assert esperar(app, lambda: precarga_concluida)
     inicio = datetime.now() - timedelta(minutes=10)
     RepositorioLeituras().adicionar_lote(
         Leitura(inicio + timedelta(seconds=i), 220.0, 1.0) for i in range(30)

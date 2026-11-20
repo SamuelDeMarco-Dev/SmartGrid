@@ -1,5 +1,6 @@
 """Protocolo serial e placa virtual (issue #56)."""
 
+import os
 import time
 
 import pytest
@@ -84,6 +85,8 @@ def test_ack_do_handshake_confere_velocidade_e_intervalo():
 # ----------------------------------------------------------------------
 @pytest.fixture
 def placa():
+    if os.name != "posix":
+        pytest.skip("Integração com pseudoterminal real requer POSIX (os.openpty e tty).")
     placa = PlacaVirtual.criar(tempo_sync_s=0.3, watchdog_s=0.5).iniciar()
     yield placa
     placa.parar()
