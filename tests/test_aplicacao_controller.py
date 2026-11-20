@@ -1,5 +1,6 @@
 """AplicacaoController: serial + banco + barramento, ponta a ponta (issue #59)."""
 
+import os
 import time
 
 import pytest
@@ -31,6 +32,8 @@ def esperar(app, condicao, prazo=5.0):
 
 @pytest.fixture
 def placa():
+    if os.name != "posix":
+        pytest.skip("Integração com pseudoterminal real requer POSIX (os.openpty e tty).")
     placa = PlacaVirtual.criar().iniciar()
     yield placa
     placa.parar()

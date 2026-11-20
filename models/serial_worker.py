@@ -247,11 +247,14 @@ class SerialWorker(QThread):
                 self._serial.write(self._comandos.get())
 
             for mensagem in self._ler_mensagens():
-                ultimo_pacote = time.monotonic()
                 if mensagem.comando is Comando.TLM:
                     self._tratar_telemetria(mensagem)
                 elif protocolo.e_ack(mensagem, Comando.RELE.value):
+                    if len(mensagem.campos) != 2 or mensagem.campos[1] not in ("0", "1"):
+                        self._descartar(ErroProtocolo("ACK de RELE deve conter somente o estado 0 ou 1."))
+                        continue
                     logger.info("Placa confirmou o comando RELE,%s.", mensagem.campos[1])
+                ultimo_pacote = time.monotonic()
 
             silencio = time.monotonic() - ultimo_pacote
             if silencio > self.limite_silencio_s:

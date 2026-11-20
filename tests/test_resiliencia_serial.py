@@ -1,5 +1,6 @@
 """SerialWorker e aplicação contra a máquina de estados da placa virtual."""
 
+import logging
 from time import monotonic
 
 import pytest
@@ -127,17 +128,75 @@ def test_sync_falho_reinicia_handshake_em_9600_e_negocia_velocidade_menor(
         assert worker.wait(2000)
 
 
-def test_ack_rele_incompleto_e_contabilizado_sem_perder_link(
-    serial_simulada, conectar, aguardar_qt,
+@pytest.mark.parametrize("estado", ["0", "1"])
+def test_ack_rele_valido_e_confirmado_sem_descarte(
+    serial_simulada, conectar, aguardar_qt, caplog, estado,
 ):
     placa = serial_simulada()
+    caplog.set_level(logging.INFO, logger="smartgrid")
     worker, leituras = conectar(placa)
+    aguardar_qt(lambda: "Placa confirmou o comando RELE,1." in caplog.messages)
     perdas = QSignalSpy(worker.link_perdido)
     total = worker.pacotes_descartados
-    placa.injetar(protocolo.ack("RELE"))
+    caplog.clear()
+
+    placa.injetar(protocolo.ack("RELE", estado))
+    placa.injetar(protocolo.telemetria(999, 987.6, 0.1, True))
+    aguardar_qt(lambda: any(args[0].tensao == 987.6 for args in leituras))
+
+    assert f"Placa confirmou o comando RELE,{estado}." in caplog.messages
+    assert worker.pacotes_descartados == total
+    assert worker.isRunning() and len(perdas) == 0
+
+
+@pytest.mark.parametrize("campos", [(), ("2",), ("valor_invalido",), ("",), ("1", "extra")])
+def test_ack_rele_invalido_e_contabilizado_sem_perder_link(
+    serial_simulada, conectar, aguardar_qt, caplog, campos,
+):
+    placa = serial_simulada()
+    caplog.set_level(logging.INFO, logger="smartgrid")
+    worker, leituras = conectar(placa)
+    aguardar_qt(lambda: "Placa confirmou o comando RELE,1." in caplog.messages)
+    perdas = QSignalSpy(worker.link_perdido)
+    total = worker.pacotes_descartados
+    caplog.clear()
+    placa.injetar(protocolo.ack("RELE", *campos))
     placa.injetar(protocolo.telemetria(999, 987.6, 0.1, True))
     aguardar_qt(lambda: worker.pacotes_descartados > total or len(perdas) != 0)
 
     assert len(perdas) == 0
     assert worker.pacotes_descartados == total + 1
     aguardar_qt(lambda: any(args[0].tensao == 987.6 for args in leituras))
+    assert worker.isRunning()
+    assert any(
+        registro.levelno == logging.WARNING and "Pacote serial descartado" in registro.message
+        for registro in caplog.records
+    )
+    for estado in ("0", "1"):
+        assert f"Placa confirmou o comando RELE,{estado}." not in caplog.messages
+
+
+def test_ack_rele_com_checksum_invalido_nao_e_confirmado(
+    serial_simulada, conectar, aguardar_qt, caplog,
+):
+    placa = serial_simulada()
+    caplog.set_level(logging.INFO, logger="smartgrid")
+    worker, leituras = conectar(placa)
+    aguardar_qt(lambda: "Placa confirmou o comando RELE,1." in caplog.messages)
+    perdas = QSignalSpy(worker.link_perdido)
+    total = worker.pacotes_descartados
+    caplog.clear()
+    corpo, checksum = protocolo.ack("RELE", "0").rsplit(b"*", 1)
+    adulterado = corpo + (b"*00\n" if checksum != b"00\n" else b"*01\n")
+
+    placa.injetar(adulterado)
+    placa.injetar(protocolo.telemetria(999, 987.6, 0.1, True))
+    aguardar_qt(lambda: any(args[0].tensao == 987.6 for args in leituras))
+
+    assert worker.pacotes_descartados == total + 1
+    assert "Placa confirmou o comando RELE,0." not in caplog.messages
+    assert any(
+        registro.levelno == logging.WARNING and "Checksum inválido" in registro.message
+        for registro in caplog.records
+    )
+    assert worker.isRunning() and len(perdas) == 0
