@@ -2,13 +2,17 @@
 
 import json
 import logging
+import time
+from types import SimpleNamespace
 
 import pytest
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QMessageBox
 
 import models.config_manager as modulo_config
 from controllers.serial_config_controller import SerialConfigController
 from models.config_manager import ConfigManager, Configuracao
+from models.database_worker import DatabaseWorker
 from models.porta_serial import PortaSerial
 
 PORTAS_DA_MAQUINA = ["COM1", "COM3", "COM7"]
@@ -37,11 +41,42 @@ def log(caplog):
 
 
 @pytest.fixture
-def tela(app, caminho_config, avisos, monkeypatch):
+def banco(app):
+    worker = DatabaseWorker()
+    worker.start()
+    yield worker
+    worker.parar()
+    assert worker.wait(2000)
+    app.processEvents()
+
+
+@pytest.fixture
+def aguardar_banco(banco):
+    def aguardar():
+        concluidos = []
+        banco.executar(lambda: None, ao_concluir=concluidos.append)
+        prazo = time.monotonic() + 3
+        while not concluidos and time.monotonic() < prazo:
+            QTest.qWait(5)
+        assert concluidos, "O callback do DatabaseWorker não chegou à GUI"
+    return aguardar
+
+
+@pytest.fixture
+def tela(caminho_config, avisos, monkeypatch, banco, aguardar_banco):
     monkeypatch.setattr(PortaSerial, "listar_portas", staticmethod(lambda: list(PORTAS_DA_MAQUINA)))
+    servico = SimpleNamespace(
+        banco=banco,
+        conectar_serial=lambda _parametros: None,
+        desconectar_serial=lambda: None,
+        atualizar_configuracao=lambda _config: None,
+    )
 
     def criar(config=None):
-        return SerialConfigController(config or Configuracao())
+        janela = SerialConfigController(config or Configuracao(), servico)
+        aguardar_banco()
+        assert janela.botaoConectar.isEnabled()
+        return janela
 
     return criar
 
@@ -90,13 +125,17 @@ def test_conectar_sem_porta_avisa_e_loga(tela, avisos, log):
     assert len(_mensagens(log, "WARNING")) == 1
 
 
-def test_conectar_salva_config_preserva_falha_simulada_e_loga_info(tela, log, caminho_config):
+def test_conectar_salva_config_preserva_falha_simulada_e_loga_info(
+    tela, log, caminho_config, aguardar_banco,
+):
     janela = tela(Configuracao(simular_falha_corte=True))
     janela.comboPortaSerial.setCurrentText("COM7")
     janela.comboBaudRate.setCurrentIndex(janela.comboBaudRate.findData(38400))
     janela.editTimeout.setText("3000")
+    log.clear()
 
     janela.conectar()
+    aguardar_banco()
 
     assert janela.porta_serial.conectado
     assert json.loads(caminho_config.read_text(encoding="utf-8")) == {
@@ -113,12 +152,13 @@ def test_conectar_salva_config_preserva_falha_simulada_e_loga_info(tela, log, ca
     ]
 
 
-def test_configuracao_salva_volta_na_proxima_abertura(tela):
+def test_configuracao_salva_volta_na_proxima_abertura(tela, aguardar_banco):
     primeira = tela()
     primeira.comboPortaSerial.setCurrentText("COM3")
     primeira.comboBaudRate.setCurrentIndex(primeira.comboBaudRate.findData(9600))
     primeira.editTimeout.setText("4000")
     primeira.conectar()
+    aguardar_banco()
 
     segunda = tela(ConfigManager.carregar())
 
@@ -127,9 +167,25 @@ def test_configuracao_salva_volta_na_proxima_abertura(tela):
     assert segunda.editTimeout.text() == "4000"
 
 
-def test_desconectar_loga_info(tela, log):
+def test_configuracao_serial_preserva_limites_e_amostragem_atualizados(tela, aguardar_banco):
+    janela = tela()
+    limites = {"corrente": 8.0, "tensao": 210.0, "potencia": 4200.0}
+    ConfigManager.salvar(Configuracao(limites_iniciais=limites, taxa_amostragem_ms=250))
+    janela.comboPortaSerial.setCurrentText("COM7")
+
+    janela.conectar()
+    aguardar_banco()
+
+    gravado = ConfigManager.carregar()
+    assert gravado.porta_com == "COM7"
+    assert gravado.limites_iniciais == limites
+    assert gravado.taxa_amostragem_ms == 250
+
+
+def test_desconectar_loga_info(tela, log, aguardar_banco):
     janela = tela()
     janela.conectar()
+    aguardar_banco()
     log.clear()
 
     janela.desconectar()
@@ -138,7 +194,7 @@ def test_desconectar_loga_info(tela, log):
     assert _mensagens(log, "INFO") == ["Comunicação serial encerrada: COM1 @ 115200 bps."]
 
 
-def test_falha_ao_gravar_loga_error_e_mantem_conexao(tela, avisos, log, monkeypatch):
+def test_falha_ao_gravar_loga_error_e_mantem_conexao(tela, avisos, log, monkeypatch, aguardar_banco):
     def falhar(_config):
         raise OSError("sem permissão")
 
@@ -146,6 +202,7 @@ def test_falha_ao_gravar_loga_error_e_mantem_conexao(tela, avisos, log, monkeypa
     janela = tela()
 
     janela.conectar()
+    aguardar_banco()
 
     assert janela.porta_serial.conectado
     assert _mensagens(log, "ERROR") == ["Não foi possível salvar a configuração serial: sem permissão."]

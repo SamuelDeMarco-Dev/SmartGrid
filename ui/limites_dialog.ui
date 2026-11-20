@@ -82,6 +82,19 @@
     </layout>
    </item>
    <item>
+    <widget class="QLabel" name="label_status">
+     <property name="text"><string/></property>
+     <property name="wordWrap"><bool>true</bool></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QProgressBar" name="progresso">
+     <property name="minimum"><number>0</number></property>
+     <property name="maximum"><number>0</number></property>
+     <property name="textVisible"><bool>false</bool></property>
+    </widget>
+   </item>
+   <item>
     <widget class="QDialogButtonBox" name="button_box">
      <property name="orientation">
       <enum>Qt::Orientation::Horizontal</enum>

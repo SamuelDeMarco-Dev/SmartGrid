@@ -1,303 +1,155 @@
-import logging
-import math
-import sqlite3
+"""Coordena a edição de regras, o worker compartilhado e o barramento."""
 
-from PyQt6.QtWidgets import QDialog, QMessageBox
-from ui.limites_dialog_ui import Ui_Dialog
+import logging
+from weakref import WeakMethod
+
+from PyQt6 import sip
+from PyQt6.QtCore import QObject
+
 from models.barramento import barramento
+from models.database_worker import DatabaseWorker
 from models.evento import TipoEvento
-from models.regra_alerta import Grandeza, RegraAlerta
+from models.regra_alerta import RegraAlerta
 from models.repositorio_regras import RepositorioRegras
+from models.servico_limites import salvar_limites
+from models.validador_limites import EntradaLimiteInvalida, RascunhoRegra, validar_regras
+from views.limites_dialog_view import LimitesDialogView
 
 logger = logging.getLogger("smartgrid")
 
 
-class LimitesDialogController(QDialog):
+class LimitesDialogController(QObject):
     def __init__(
-        self,
-        repositorio: RepositorioRegras,
-        parent=None,
-    ):
-        super().__init__(parent)
-        self.ui = Ui_Dialog()
-        self.ui.setupUi(self)
-
-        self.repositorio = repositorio
-        try:
-            self.regras_salvas = self.repositorio.obter_regras()
-        except sqlite3.Error as erro:
-            logger.error("Erro de banco ao carregar regras de limites: %s", erro)
-            QMessageBox.critical(
-                self,
-                "Erro ao carregar limites",
-                "Não foi possível carregar as regras salvas. Verifique o banco de dados.",
-            )
-            self.regras_salvas = []
-
-        self._rascunhos = [
-            self._regra_para_rascunho(regra) for regra in self.regras_salvas
-        ]
+        self, view: LimitesDialogView, repositorio: RepositorioRegras, banco: DatabaseWorker,
+    ) -> None:
+        super().__init__(view)
+        self.view = view
+        self._repositorio = repositorio
+        self._banco = banco
+        self._rascunhos: list[RascunhoRegra] = []
         self._indice_atual = -1
-        self._carregando_formulario = False
         self._alteracoes_pendentes = False
+        self._salvando = False
+        self._encerrado = False
+        self._mensagem = ""
 
-        self._configurar_componentes()
-        self._conectar_sinais()
-        self.carregar_dados_na_tela()
+        view.regra_selecionada.connect(self._selecionar)
+        view.regra_editada.connect(self._editar)
+        view.salvar_solicitado.connect(self.validar_e_salvar)
+        view.cancelar_solicitado.connect(self.confirmar_cancelamento)
+        view.finished.connect(self._ao_fechar)
+        view.mostrar_estado("Carregando regras…", ocupado=True)
+        banco.executar(
+            repositorio.obter_regras,
+            ao_concluir=self._callback_tela(self._carregar_regras),
+            ao_falhar=self._callback_tela(self._falhar_carregamento),
+        )
 
-    def _configurar_componentes(self) -> None:
-        self.ui.combo_grandeza.clear()
-        for grandeza in (Grandeza.CORRENTE, Grandeza.TENSAO, Grandeza.POTENCIA):
-            self.ui.combo_grandeza.addItem(grandeza.rotulo, grandeza)
+    def _carregar_regras(self, regras: list[RegraAlerta]) -> None:
+        self._rascunhos = [RascunhoRegra.da_regra(regra) for regra in regras]
+        self.view.listar_regras([self._nome_na_lista(regra) for regra in self._rascunhos])
+        self._mensagem = "" if regras else "Nenhuma regra cadastrada."
+        self._selecionar(0 if regras else -1)
 
-        self._atualizar_sufixo_limite()
+    def _falhar_carregamento(self, erro: Exception) -> None:
+        logger.error("Erro ao carregar regras de limites: %s", erro)
+        self.view.mostrar_estado(
+            "Não foi possível carregar as regras. Feche o diálogo e tente novamente.",
+        )
 
-    def _conectar_sinais(self) -> None:
-        self.ui.listaRegras.currentRowChanged.connect(self._selecionar_regra)
-        self.ui.input_nome.textChanged.connect(self._registrar_alteracao)
-        self.ui.combo_grandeza.currentIndexChanged.connect(self._ao_grandeza_alterada)
-        self.ui.input_limite.textChanged.connect(self._registrar_alteracao)
-        self.ui.check_ativa.toggled.connect(self._registrar_alteracao)
-        self.ui.button_box.accepted.connect(self.validar_e_salvar)
-        self.ui.button_box.rejected.connect(self.confirmar_cancelamento)
-
-    def carregar_dados_na_tela(self) -> None:
-        """Preenche a lista e carrega a primeira regra no formulário."""
-        self.ui.listaRegras.clear()
-        for indice in range(len(self._rascunhos)):
-            self.ui.listaRegras.addItem(self._texto_item_lista(indice))
-
-        if self._rascunhos:
-            self.ui.listaRegras.setCurrentRow(0)
-
-        self._alteracoes_pendentes = False
-
-    def _selecionar_regra(self, indice: int) -> None:
-        if self._carregando_formulario:
+    def _selecionar(self, indice: int) -> None:
+        if self._salvando or self._encerrado:
             return
+        tem_selecao = 0 <= indice < len(self._rascunhos)
+        self._indice_atual = indice if tem_selecao else -1
+        self.view.selecionar_regra(self._indice_atual)
+        self.view.mostrar_regra(self._rascunhos[indice] if tem_selecao else None)
+        self._mostrar_edicao()
 
-        self._sincronizar_formulario_com_rascunho()
-
-        if indice < 0 or indice >= len(self._rascunhos):
-            self._indice_atual = -1
+    def _editar(self, regra: RascunhoRegra) -> None:
+        if self._salvando or self._encerrado or self._indice_atual < 0:
             return
-
-        self._indice_atual = indice
-        self._carregar_rascunho_no_formulario(indice)
-
-    def _carregar_rascunho_no_formulario(self, indice: int) -> None:
-        rascunho = self._rascunhos[indice]
-        self._carregando_formulario = True
-        try:
-            self.ui.input_nome.setText(rascunho["nome"])
-            self._selecionar_grandeza(rascunho["grandeza"])
-            self.ui.input_limite.setText(rascunho["limite_maximo"])
-            self.ui.check_ativa.setChecked(rascunho["ativa"])
-            self._atualizar_sufixo_limite()
-        finally:
-            self._carregando_formulario = False
-
-    def _selecionar_grandeza(self, grandeza: Grandeza) -> None:
-        indice = self.ui.combo_grandeza.findData(grandeza)
-        if indice >= 0:
-            self.ui.combo_grandeza.setCurrentIndex(indice)
-
-    def _registrar_alteracao(self) -> None:
-        if self._carregando_formulario or self._indice_atual < 0:
-            return
-
+        self._rascunhos[self._indice_atual] = regra
         self._alteracoes_pendentes = True
-        self._sincronizar_formulario_com_rascunho()
-        self._atualizar_item_lista(self._indice_atual)
+        self.view.mostrar_nome(self._indice_atual, self._nome_na_lista(regra))
 
-    def _ao_grandeza_alterada(self) -> None:
-        self._atualizar_sufixo_limite()
-        self._registrar_alteracao()
-
-    def _atualizar_sufixo_limite(self) -> None:
-        grandeza = self.ui.combo_grandeza.currentData()
-        if isinstance(grandeza, Grandeza):
-            self.ui.input_limite.setPlaceholderText(
-                f"Informe o limite em {grandeza.unidade}"
-            )
-
-    def _sincronizar_formulario_com_rascunho(self) -> None:
-        if self._indice_atual < 0 or self._indice_atual >= len(self._rascunhos):
-            return
-
-        self._rascunhos[self._indice_atual] = {
-            "nome": self.ui.input_nome.text(),
-            "grandeza": self.ui.combo_grandeza.currentData(),
-            "limite_maximo": self.ui.input_limite.text(),
-            "ativa": self.ui.check_ativa.isChecked(),
-        }
-
-    def _atualizar_item_lista(self, indice: int) -> None:
-        item = self.ui.listaRegras.item(indice)
-        if item is not None:
-            item.setText(self._texto_item_lista(indice))
-
-    def _texto_item_lista(self, indice: int) -> str:
-        nome = self._rascunhos[indice]["nome"].strip()
-        return nome or "Regra sem nome"
+    @staticmethod
+    def _nome_na_lista(regra: RascunhoRegra) -> str:
+        return regra.nome.strip() or "Regra sem nome"
 
     def validar_e_salvar(self) -> None:
-        """Valida os dados, atualiza o repositório e emite o barramento."""
-        self._sincronizar_formulario_com_rascunho()
-        novas_regras = self._construir_regras_validas()
-        if novas_regras is None:
+        if self._salvando or self._encerrado or not self._rascunhos:
             return
-
         try:
-            self.repositorio.salvar_regras(novas_regras)
-            self.regras_salvas = self.repositorio.obter_regras()
-        except sqlite3.Error as erro:
-            logger.error("Erro de banco ao salvar regras de limites: %s", erro)
-            QMessageBox.critical(
-                self,
-                "Erro ao salvar limites",
-                "Não foi possível salvar as regras. Nenhuma alteração foi aplicada.",
-            )
+            regras = validar_regras(self._rascunhos)
+        except EntradaLimiteInvalida as erro:
+            logger.warning("Entrada inválida em limites (%s): %s", erro.campo, erro)
+            self._selecionar(erro.indice)
+            self.view.avisar_entrada(erro.campo, str(erro))
             return
-        self._rascunhos = [
-            self._regra_para_rascunho(regra) for regra in self.regras_salvas
-        ]
-        self._alteracoes_pendentes = False
 
-        barramento.regras_alteradas.emit(self.regras())
-        barramento.registrar_evento(
-            TipoEvento.COMANDO,
-            "Parâmetros de limites atualizados.",
+        self._salvando = True
+        self.view.mostrar_estado("Salvando regras…", ocupado=True, cancelar=False)
+        avisar_tela = self._callback_tela(self._concluir_salvamento)
+
+        def publicar(erro_json: Exception | None) -> None:
+            # A confirmação do banco vale para o aplicativo, mesmo se a tela já fechou.
+            barramento.regras_alteradas.emit(regras)
+            if erro_json is None:
+                mensagem = "Parâmetros de limites atualizados."
+            else:
+                logger.error("Regras salvas no banco, mas o config.json falhou: %s", erro_json)
+                mensagem = "Parâmetros de limites atualizados apenas no banco."
+            barramento.registrar_evento(TipoEvento.COMANDO, mensagem)
+            avisar_tela(erro_json)
+
+        self._banco.executar(
+            salvar_limites, self._repositorio, regras,
+            ao_concluir=publicar,
+            ao_falhar=self._callback_tela(self._falhar_salvamento),
         )
-        self.accept()
 
-    def _construir_regras_validas(self) -> list[RegraAlerta] | None:
-        regras = []
-        nomes_normalizados = set()
+    def _concluir_salvamento(self, erro_json: Exception | None) -> None:
+        self._alteracoes_pendentes = False
+        self._salvando = False
+        if erro_json is None:
+            self.view.accept()
+            return
+        self._mensagem = (
+            "As regras foram salvas no banco e já estão em uso. "
+            "Não foi possível atualizar o config.json. Use Salvar para tentar novamente."
+        )
+        self._mostrar_edicao()
 
-        for indice, rascunho in enumerate(self._rascunhos):
-            nome = rascunho["nome"].strip()
-            limite_texto = rascunho["limite_maximo"].strip()
-            grandeza = rascunho["grandeza"]
+    def _falhar_salvamento(self, erro: Exception) -> None:
+        logger.error("Erro ao salvar regras de limites no banco: %s", erro)
+        self._salvando = False
+        self._mensagem = "Não foi possível salvar as regras no banco. Nenhuma alteração foi aplicada."
+        self._mostrar_edicao()
 
-            if not nome:
-                self._avisar_entrada_invalida(
-                    indice,
-                    "nome",
-                    rascunho["nome"],
-                    "O nome da regra não pode ficar vazio.",
-                )
-                return None
-
-            nome_normalizado = self._normalizar_nome(nome)
-            if nome_normalizado in nomes_normalizados:
-                self._avisar_entrada_invalida(
-                    indice,
-                    "nome",
-                    nome,
-                    "Não é permitido cadastrar regras com nomes duplicados.",
-                )
-                return None
-
-            if not limite_texto:
-                self._avisar_entrada_invalida(
-                    indice,
-                    "limite_maximo",
-                    limite_texto,
-                    "O limite máximo não pode ficar vazio.",
-                )
-                return None
-
-            try:
-                limite = float(limite_texto.replace(",", "."))
-            except ValueError:
-                self._avisar_entrada_invalida(
-                    indice,
-                    "limite_maximo",
-                    limite_texto,
-                    "O limite máximo deve ser um número.",
-                )
-                return None
-
-            if not math.isfinite(limite) or limite <= 0:
-                self._avisar_entrada_invalida(
-                    indice,
-                    "limite_maximo",
-                    limite_texto,
-                    "O limite máximo deve ser maior que zero.",
-                )
-                return None
-
-            if not isinstance(grandeza, Grandeza):
-                self._avisar_entrada_invalida(
-                    indice,
-                    "grandeza",
-                    grandeza,
-                    "Selecione uma grandeza válida para a regra.",
-                )
-                return None
-
-            nomes_normalizados.add(nome_normalizado)
-            regras.append(
-                RegraAlerta(
-                    nome=nome,
-                    grandeza=grandeza,
-                    limite_maximo=limite,
-                    ativa=bool(rascunho["ativa"]),
-                )
-            )
-
-        return regras
-
-    def _selecionar_indice_com_erro(self, indice: int) -> None:
-        if self.ui.listaRegras.currentRow() != indice:
-            self.ui.listaRegras.setCurrentRow(indice)
-
-    def _avisar_entrada_invalida(
-        self, indice: int, campo: str, valor: object, mensagem: str
-    ) -> None:
-        self._selecionar_indice_com_erro(indice)
-        logger.warning("Entrada inválida em limites: %s=%r", campo, valor)
-        QMessageBox.warning(self, "Entrada inválida", mensagem)
-
-    @staticmethod
-    def _normalizar_nome(nome: str) -> str:
-        return " ".join(nome.split()).casefold()
+    def _mostrar_edicao(self) -> None:
+        self.view.mostrar_estado(
+            self._mensagem, editar=bool(self._rascunhos), tem_selecao=self._indice_atual >= 0,
+        )
 
     def confirmar_cancelamento(self) -> None:
-        """Fecha diretamente ou confirma descarte quando há edição pendente."""
-        if not self._alteracoes_pendentes:
-            self.reject()
+        if self._salvando or self._encerrado:
             return
+        if not self._alteracoes_pendentes or self.view.confirmar_descarte():
+            self.view.fechar_cancelado()
 
-        resposta = QMessageBox.question(
-            self,
-            "Confirmar Descarte",
-            "Deseja realmente descartar as alterações pendentes?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
+    def _ao_fechar(self, _resultado: int) -> None:
+        self._encerrado = True
 
-        if resposta == QMessageBox.StandardButton.Yes:
-            self.reject()
+    def _callback_tela(self, metodo):
+        """Um trabalho na fila não prolonga a vida do diálogo ou do controller."""
+        referencia = WeakMethod(metodo)
 
-    def regras(self) -> list[RegraAlerta]:
-        """Método público exigido para consulta pós-execução."""
-        return [
-            RegraAlerta(
-                nome=regra.nome,
-                grandeza=regra.grandeza,
-                limite_maximo=regra.limite_maximo,
-                ativa=regra.ativa,
-            )
-            for regra in self.regras_salvas
-        ]
+        def entregar(resultado):
+            callback = referencia()
+            if callback is not None:
+                controller = callback.__self__
+                if not sip.isdeleted(controller) and not controller._encerrado:
+                    callback(resultado)
 
-    @staticmethod
-    def _regra_para_rascunho(regra: RegraAlerta) -> dict:
-        return {
-            "nome": regra.nome,
-            "grandeza": regra.grandeza,
-            "limite_maximo": f"{regra.limite_maximo:g}",
-            "ativa": regra.ativa,
-        }
+        return entregar
