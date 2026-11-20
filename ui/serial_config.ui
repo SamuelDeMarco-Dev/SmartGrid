@@ -57,7 +57,7 @@
       <item>
        <widget class="QLabel" name="labelSubtituloSerial">
         <property name="text">
-         <string>Configure a porta do microcontrolador. Nesta entrega a conexão apenas atualiza o status na tela.</string>
+         <string>Configure a porta do microcontrolador e acompanhe cada fase do handshake com a placa.</string>
         </property>
         <property name="wordWrap">
          <bool>true</bool>
@@ -155,7 +155,7 @@
         <item row="1" column="0">
          <widget class="QLabel" name="labelBaudRate">
           <property name="text">
-           <string>Baud Rate (bps)</string>
+           <string>Velocidade alvo (bps)</string>
           </property>
           <property name="buddy">
            <cstring>comboBaudRate</cstring>
@@ -178,7 +178,17 @@
           </property>
          </widget>
         </item>
-        <item row="2" column="0">
+        <item row="2" column="1">
+         <widget class="QLabel" name="labelAvisoBaudRate">
+          <property name="text">
+           <string>A conexão sempre inicia em 9600 bps; a velocidade escolhida é negociada com a placa no handshake.</string>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item row="3" column="0">
          <widget class="QLabel" name="labelTimeout">
           <property name="text">
            <string>Timeout (ms)</string>
@@ -188,7 +198,7 @@
           </property>
          </widget>
         </item>
-        <item row="2" column="1">
+        <item row="3" column="1">
          <widget class="QLineEdit" name="editTimeout">
           <property name="minimumSize">
            <size>
@@ -210,7 +220,39 @@
           </property>
          </widget>
         </item>
-        <item row="3" column="0">
+        <item row="4" column="0">
+         <widget class="QLabel" name="labelTaxaAmostragem">
+          <property name="text">
+           <string>Taxa de amostragem (ms)</string>
+          </property>
+          <property name="buddy">
+           <cstring>editTaxaAmostragem</cstring>
+          </property>
+         </widget>
+        </item>
+        <item row="4" column="1">
+         <widget class="QLineEdit" name="editTaxaAmostragem">
+          <property name="minimumSize">
+           <size>
+            <width>180</width>
+            <height>28</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>260</width>
+            <height>16777215</height>
+           </size>
+          </property>
+          <property name="placeholderText">
+           <string>100 a 5000</string>
+          </property>
+          <property name="toolTip">
+           <string>Período da telemetria pedido à placa no handshake</string>
+          </property>
+         </widget>
+        </item>
+        <item row="5" column="0">
          <widget class="QLabel" name="labelInicioSessao">
           <property name="text">
            <string>Início da sessão</string>
@@ -220,7 +262,7 @@
           </property>
          </widget>
         </item>
-        <item row="3" column="1">
+        <item row="5" column="1">
          <widget class="QDateEdit" name="dateInicioSessao">
           <property name="minimumSize">
            <size>
@@ -306,6 +348,13 @@
        <number>4</number>
       </property>
       <item>
+       <layout class="QHBoxLayout" name="layoutEtapasLink">
+        <property name="spacing">
+         <number>6</number>
+        </property>
+       </layout>
+      </item>
+      <item>
        <widget class="QLabel" name="labelStatusConexao">
         <property name="font">
          <font>
@@ -325,6 +374,13 @@
         </property>
         <property name="wordWrap">
          <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="labelVelocidadeNegociada">
+        <property name="text">
+         <string>Velocidade negociada: —</string>
         </property>
        </widget>
       </item>

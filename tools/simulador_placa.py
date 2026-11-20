@@ -26,7 +26,6 @@ import select
 import sys
 import threading
 import time
-import tty
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -76,6 +75,10 @@ class PlacaVirtual:
     @classmethod
     def criar(cls, **opcoes) -> "PlacaVirtual":
         """Abre um par pty e devolve a placa; o desktop usa ``placa.caminho``."""
+        # Importado aqui: ``tty`` só existe em macOS/Linux, e os testes usam a
+        # máquina de estados (PlacaEmMemoria) também no Windows.
+        import tty
+
         mestre, escravo = os.openpty()
         tty.setraw(escravo)
         caminho = os.ttyname(escravo)

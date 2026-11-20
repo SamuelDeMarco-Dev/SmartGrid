@@ -1,25 +1,29 @@
 """Controller do Painel de Configuração da Comunicação Serial.
 
-Traduz o formulário da tela em chamadas ao serviço :class:`PortaSerial` e
-publica o resultado no barramento — a janela principal usa
-``status_conexao_alterado`` para alimentar a ``QStatusBar`` e a tela de
-Histórico recebe os eventos de conexão e desconexão.
+Media a ``SerialConfigView`` e o Model:
 
-A tela abre com a última configuração do ``data/config.json`` e grava porta,
-baud rate e timeout a cada conexão bem-sucedida. Entradas inválidas geram
-``[WARNING]`` no log; conectar e desconectar geram ``[INFO]``; falha ao abrir a
-porta ou ao gravar o arquivo gera ``[ERROR]``.
+    - formulário → validação em :class:`PortaSerial` → ``conectar_serial`` do
+      ``AplicacaoController``, que cria a thread do handshake;
+    - fases do link (``barramento.estado_link_alterado``) → faixa de etapas e
+      indicador colorido: Desconectado → Abrindo porta → Handshake a 9600 bps
+      → Negociando velocidade → Telemetria ativa, ou Link perdido;
+    - velocidade efetivamente negociada (``velocidade_negociada`` do serviço
+      serial) → rótulo da tela;
+    - porta, velocidade alvo, timeout e taxa de amostragem → ``data/config.json``,
+      gravado no ``DatabaseWorker`` para não bloquear a GUI.
 
-"Conectar" valida o formulário e entrega os parâmetros ao serviço serial
-(``AplicacaoController``), que cria a thread do handshake. O resultado —
-telemetria ativa, encerramento ou link perdido — volta pelo barramento.
+Entradas inválidas geram ``[WARNING]`` no log; conectar e desconectar geram
+``[INFO]``; falha ao abrir a porta ou ao gravar o arquivo gera ``[ERROR]``.
 """
 
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import date
 from weakref import WeakMethod
 
 from PyQt6 import sip
-from PyQt6.QtCore import QDate
-from PyQt6.QtWidgets import QMessageBox, QWidget
+from PyQt6.QtCore import QObject
 
 from models.barramento import barramento
 from models.config_manager import ConfigManager, Configuracao
@@ -27,56 +31,78 @@ from models.estado_link import EstadoLink
 from models.log_config import obter_logger
 from models.porta_serial import (
     BAUD_RATES,
-    ErroConexaoSerial,
     PORTAS_SIMULADAS,
+    ErroConexaoSerial,
     ParametrosConexao,
     PortaSerial,
 )
-from ui.serial_config_ui import Ui_SerialConfig
+from views.serial_config_view import SerialConfigView
 
 logger = obter_logger()
 
+#: Fases mostradas na faixa da tela, na ordem do protocolo.
+ETAPAS = (
+    EstadoLink.DESCONECTADO,
+    EstadoLink.ABRINDO_PORTA,
+    EstadoLink.HANDSHAKE,
+    EstadoLink.NEGOCIANDO,
+    EstadoLink.TELEMETRIA,
+)
 
-class SerialConfigController(QWidget, Ui_SerialConfig):
-    """Tela de configuração e abertura da porta serial."""
 
-    #: Item neutro no topo do combo. Existe para que "conectar sem escolher
-    #: porta" continue sendo um caminho possível — e, portanto, validável.
-    _PLACEHOLDER_PORTA = "— Selecione a porta —"
+class SerialConfigController(QObject):
+    """Configura a porta, dispara o handshake e acompanha o link com a placa."""
 
-    #: Mesmas cores do badge de disjuntor, para a tela não destoar do resto.
-    _COR_CONECTADO = "#2E7D32"
-    _COR_DESCONECTADO = "#C62828"
-
-    def __init__(self, config: Configuracao, servico_serial) -> None:
+    def __init__(
+        self,
+        config: Configuracao,
+        servico_serial,
+        view: SerialConfigView | None = None,
+    ) -> None:
         super().__init__()
-        self.setupUi(self)
+        self.view = view or SerialConfigView()
         self.porta_serial = PortaSerial()
         #: O AplicacaoController é dono dos workers usados pelo formulário.
         self._servico_serial = servico_serial
         self._config = config
         self._consultando_portas = False
         self._primeira_listagem = True
-        # Editável para aceitar a porta da placa virtual (/dev/ttysNNN), que
-        # não aparece na enumeração do sistema.
-        self.comboPortaSerial.setEditable(True)
-        self._preencher_baud_rates()
-        self.editTimeout.setText(str(config.timeout_ms))
-        self._configurar_data_sessao()
-        self._conectar_acoes()
+        self._estado = EstadoLink.DESCONECTADO
+        self._detalhe = ""
+        #: Última etapa alcançada, para mostrar onde o link caiu.
+        self._etapa = 0
+
+        hoje = date.today()
+        self.view.preencher_velocidades(list(BAUD_RATES), config.baud_rate)
+        self.view.definir_timeout(config.timeout_ms)
+        self.view.definir_taxa_amostragem(config.taxa_amostragem_ms)
+        self.view.definir_data_sessao(hoje, maxima=hoje)
+        self.view.definir_etapas([estado.rotulo for estado in ETAPAS])
+        self.view.mostrar_velocidade_negociada("—")
+
+        self._conectar_view()
         barramento.estado_link_alterado.connect(self._ao_estado_link)
+        servico_serial.velocidade_negociada.connect(self._ao_velocidade_negociada)
         self.atualizar_portas()
 
+    def _conectar_view(self) -> None:
+        self.view.conectar_solicitado.connect(self.conectar)
+        self.view.desconectar_solicitado.connect(self.desconectar)
+        self.view.atualizar_portas_solicitado.connect(self.atualizar_portas)
+        # A data segue editável com a porta aberta — é uma anotação da sessão,
+        # não um parâmetro da conexão —, então o detalhe precisa acompanhá-la.
+        self.view.data_sessao_alterada.connect(self._atualizar_tela)
+
     # ------------------------------------------------------------------
-    # Ações da tela
+    # Descoberta de portas
     # ------------------------------------------------------------------
     def atualizar_portas(self) -> None:
         """Enfileira a descoberta de portas do sistema."""
-        if self._consultando_portas or self.porta_serial.conectado:
+        if self._consultando_portas or self._link_ocupado:
             return
         self._consultando_portas = True
-        self._atualizar_estado_visual()
-        self.labelDetalheConexao.setText("Buscando portas…")
+        self._atualizar_tela()
+        self.view.mostrar_buscando_portas()
         self._servico_serial.banco.executar(
             PortaSerial.listar_portas,
             ao_concluir=self._callback_tela(self._mostrar_portas),
@@ -84,85 +110,161 @@ class SerialConfigController(QWidget, Ui_SerialConfig):
         )
 
     def _mostrar_portas(self, portas: list[str]) -> None:
-        selecionada = self.comboPortaSerial.currentText()
-        self.comboPortaSerial.clear()
-        self.comboPortaSerial.addItem(self._PLACEHOLDER_PORTA)
-        self.comboPortaSerial.addItems(portas)
         if self._primeira_listagem:
             self._primeira_listagem = False
-            self._selecionar_porta_salva()
+            selecionada = self._porta_inicial(portas)
         else:
-            indice = self.comboPortaSerial.findText(selecionada)
-            self.comboPortaSerial.setCurrentIndex(max(indice, 0))
+            selecionada = self.view.porta()
+        self.view.preencher_portas(portas, selecionada)
         self._consultando_portas = False
-        self._atualizar_estado_visual()
+        self._atualizar_tela()
+
+    def _porta_inicial(self, portas: list[str]) -> str:
+        """A porta do config.json ou, se ela sumiu, a primeira disponível."""
+        porta_salva = self._config.porta_com
+        if porta_salva in portas:
+            return porta_salva
+        # listar_portas() nunca devolve lista vazia.
+        logger.warning(
+            "Porta salva %s não está disponível. Selecionada %s.", porta_salva, portas[0]
+        )
+        return portas[0]
 
     def _falhar_listagem(self, erro: Exception) -> None:
         logger.error("Não foi possível listar as portas seriais: %s.", erro)
         self._mostrar_portas(list(PORTAS_SIMULADAS))
 
+    # ------------------------------------------------------------------
+    # Conectar / desconectar
+    # ------------------------------------------------------------------
     def conectar(self) -> None:
         """Valida o formulário e pede ao serviço serial o handshake na porta."""
-        if self._consultando_portas:
+        if self._consultando_portas or self._link_ocupado:
             return
         try:
             parametros = self.porta_serial.conectar(
-                porta=self._porta_selecionada(),
-                baud_rate=self._baud_rate_selecionado(),
-                timeout_ms=self._timeout_digitado(),
+                porta=self.view.porta(),
+                baud_rate=self.view.velocidade(),
+                timeout_ms=self._inteiro(self.view.timeout_digitado(), "o timeout"),
             )
             try:
+                taxa_ms = PortaSerial.validar_taxa_amostragem(
+                    self._inteiro(self.view.taxa_digitada(), "a taxa de amostragem")
+                )
+                # A taxa nova já vale para esta conexão: o SerialWorker nasce
+                # com a configuração em memória do serviço serial.
+                self._servico_serial.atualizar_configuracao(
+                    replace(self._config, taxa_amostragem_ms=taxa_ms)
+                )
                 self._servico_serial.conectar_serial(parametros)
             except Exception:
                 self.porta_serial.desconectar()
                 raise
         except ErroConexaoSerial as erro:
             logger.warning(
-                "Entrada inválida em serial: porta=%r, timeout=%r. %s",
-                self._porta_selecionada(), self.editTimeout.text(), erro,
+                "Entrada inválida em serial: porta=%r, timeout=%r, taxa=%r. %s",
+                self.view.porta(), self.view.timeout_digitado(),
+                self.view.taxa_digitada(), erro,
             )
-            self._avisar(str(erro))
+            self.view.avisar(str(erro))
             return
         except Exception as erro:
-            # Com a porta simulada isto não ocorre; com hardware real (Unidade 4)
-            # é aqui que caem driver ausente, porta ocupada etc.
-            porta = self._porta_selecionada()
+            # Driver ausente, porta ocupada etc.
+            porta = self.view.porta()
             logger.error("Falha ao abrir a porta %s: %s.", porta, erro)
-            QMessageBox.critical(
-                self, "Comunicação serial", f"Não foi possível abrir a porta {porta}.\n\n{erro}"
-            )
+            self.view.avisar_erro(f"Não foi possível abrir a porta {porta}.\n\n{erro}")
             return
 
         logger.info(
-            "Conexão serial solicitada: %s (timeout %d ms). Iniciando handshake a 9600 bps.",
-            parametros.descricao, parametros.timeout_ms,
+            "Conexão serial solicitada: %s (timeout %d ms, amostragem %d ms). "
+            "Iniciando handshake a 9600 bps.",
+            parametros.descricao, parametros.timeout_ms, taxa_ms,
         )
-        self._salvar_configuracao(parametros)
-        self._atualizar_estado_visual()
+        self.view.mostrar_velocidade_negociada("—")
+        self._salvar_configuracao(parametros, taxa_ms)
+        self._atualizar_tela()
 
     def desconectar(self) -> None:
         """Pede o encerramento cooperativo da thread serial."""
         try:
             parametros = self.porta_serial.desconectar()
         except ErroConexaoSerial as erro:
-            self._avisar(str(erro))
+            self.view.avisar(str(erro))
             return
 
         logger.info("Comunicação serial encerrada: %s.", parametros.descricao)
         self._servico_serial.desconectar_serial()
-        self._atualizar_estado_visual()
+        self._atualizar_tela()
 
+    @property
+    def _link_ocupado(self) -> bool:
+        """Há conexão pedida ou thread serial viva (conectando, ativa ou encerrando)."""
+        return self.porta_serial.conectado or self._estado.em_andamento
+
+    # ------------------------------------------------------------------
+    # Fases do link (vindas da thread serial pelo barramento)
+    # ------------------------------------------------------------------
     def _ao_estado_link(self, nome: str, detalhe: str) -> None:
-        """Link caiu ou foi encerrado pela thread: libera o formulário."""
-        if EstadoLink[nome] in (EstadoLink.LINK_PERDIDO, EstadoLink.DESCONECTADO):
-            if self.porta_serial.conectado:
-                self.porta_serial.desconectar()
-            self._atualizar_estado_visual()
-        if EstadoLink[nome] is EstadoLink.LINK_PERDIDO:
-            self.labelStatusConexao.setText(f"Link perdido — {detalhe}")
-            self.labelStatusConexao.setStyleSheet(f"color: {self._COR_DESCONECTADO};")
+        estado = EstadoLink[nome]
+        self._estado = estado
+        self._detalhe = detalhe
+        if estado in ETAPAS:
+            self._etapa = ETAPAS.index(estado)
+        if estado is EstadoLink.ABRINDO_PORTA or not estado.em_andamento:
+            self.view.mostrar_velocidade_negociada("—")
+        if not estado.em_andamento and self.porta_serial.conectado:
+            # Link caiu ou foi encerrado pela thread: libera o formulário.
+            self.porta_serial.desconectar()
+        self._atualizar_tela()
 
-    def _salvar_configuracao(self, parametros: ParametrosConexao) -> None:
+    def _ao_velocidade_negociada(self, baud: int) -> None:
+        self.view.mostrar_velocidade_negociada(f"{baud} bps")
+
+    # ------------------------------------------------------------------
+    # Reflexo do estado na interface
+    # ------------------------------------------------------------------
+    def _atualizar_tela(self) -> None:
+        livre = not self._link_ocupado and not self._consultando_portas
+        self.view.habilitar_controles(
+            campos=livre, conectar=livre, desconectar=self.porta_serial.conectado
+        )
+        self._mostrar_estado()
+
+    def _mostrar_estado(self) -> None:
+        estado, detalhe, etapa = self._estado, self._detalhe, self._etapa
+        parametros = self.porta_serial.parametros
+
+        if parametros is not None and not estado.em_andamento:
+            # "Conectar" aceito; a thread ainda não reportou a primeira fase.
+            estado, detalhe = EstadoLink.ABRINDO_PORTA, parametros.porta
+            etapa = ETAPAS.index(estado)
+        elif parametros is None and estado.em_andamento:
+            # "Desconectar" pedido; a thread ainda está liberando a porta.
+            self.view.mostrar_estado_link(
+                "Encerrando conexão", EstadoLink.DESCONECTADO.cor,
+                "Aguardando a thread serial liberar a porta…",
+            )
+            return
+
+        if estado is EstadoLink.DESCONECTADO:
+            etapa = 0
+            detalhe = detalhe or "Nenhuma porta aberta"
+        elif estado.em_andamento and parametros is not None:
+            inicio = self.view.data_sessao().strftime("%d/%m/%Y")
+            detalhe = (
+                f"{detalhe} · timeout {parametros.timeout_ms} ms · "
+                f"sessão de monitoramento iniciada em {inicio}"
+            )
+        elif estado is EstadoLink.LINK_PERDIDO:
+            detalhe = f"{detalhe} — verifique o cabo e conecte novamente."
+
+        self.view.mostrar_estado_link(estado.rotulo, estado.cor, detalhe)
+        self.view.mostrar_progresso(etapa, estado.cor, EstadoLink.TELEMETRIA.cor)
+
+    # ------------------------------------------------------------------
+    # Persistência do config.json
+    # ------------------------------------------------------------------
+    def _salvar_configuracao(self, parametros: ParametrosConexao, taxa_ms: int) -> None:
         """Atualiza os campos da conexão sobre o JSON vigente, no worker."""
         self._servico_serial.banco.executar(
             ConfigManager.atualizar,
@@ -170,6 +272,7 @@ class SerialConfigController(QWidget, Ui_SerialConfig):
             porta_com=parametros.porta,
             baud_rate=parametros.baud_rate,
             timeout_ms=parametros.timeout_ms,
+            taxa_amostragem_ms=taxa_ms,
             ao_concluir=self._callback_tela(self._configuracao_salva),
             ao_falhar=self._callback_tela(self._falhar_configuracao),
         )
@@ -180,12 +283,13 @@ class SerialConfigController(QWidget, Ui_SerialConfig):
 
     def _falhar_configuracao(self, erro: Exception) -> None:
         logger.error("Não foi possível salvar a configuração serial: %s.", erro)
-        self._avisar(
+        self.view.avisar(
             "A porta foi conectada, mas a configuração não pôde ser salva "
             "e não será lembrada na próxima abertura."
         )
 
     def _callback_tela(self, metodo):
+        """Entrega o resultado do worker só se a tela ainda existir."""
         referencia = WeakMethod(metodo)
 
         def entregar(resultado):
@@ -196,109 +300,20 @@ class SerialConfigController(QWidget, Ui_SerialConfig):
         return entregar
 
     # ------------------------------------------------------------------
-    # Montagem inicial
-    # ------------------------------------------------------------------
-    def _preencher_baud_rates(self) -> None:
-        for valor in BAUD_RATES:
-            self.comboBaudRate.addItem(str(valor), valor)
-        self.comboBaudRate.setCurrentIndex(
-            self.comboBaudRate.findData(self._config.baud_rate)
-        )
-
-    def _selecionar_porta_salva(self) -> None:
-        """Seleciona a porta do config.json ou, se ela sumiu, a primeira disponível."""
-        porta_salva = self._config.porta_com
-        indice = self.comboPortaSerial.findText(porta_salva)
-        if indice < 0:
-            # Índice 0 é o placeholder; listar_portas() nunca devolve lista vazia.
-            indice = 1
-            logger.warning(
-                "Porta salva %s não está disponível. Selecionada %s.",
-                porta_salva, self.comboPortaSerial.itemText(indice),
-            )
-        self.comboPortaSerial.setCurrentIndex(indice)
-
-    def _configurar_data_sessao(self) -> None:
-        hoje = QDate.currentDate()
-        self.dateInicioSessao.setDate(hoje)
-        # A sessão de monitoramento não começa no futuro.
-        self.dateInicioSessao.setMaximumDate(hoje)
-
-    def _conectar_acoes(self) -> None:
-        self.botaoConectar.clicked.connect(self.conectar)
-        self.botaoDesconectar.clicked.connect(self.desconectar)
-        self.botaoAtualizarPortas.clicked.connect(self.atualizar_portas)
-        # A data segue editável com a porta aberta — é uma anotação da sessão,
-        # não um parâmetro da conexão —, então o rótulo precisa acompanhá-la.
-        self.dateInicioSessao.dateChanged.connect(self._atualizar_rotulo_status)
-
-    # ------------------------------------------------------------------
     # Leitura do formulário
     # ------------------------------------------------------------------
-    def _porta_selecionada(self) -> str:
-        porta = self.comboPortaSerial.currentText()
-        if porta == self._PLACEHOLDER_PORTA:
-            return ""
-        return porta
-
-    def _baud_rate_selecionado(self) -> int:
-        return self.comboBaudRate.currentData()
-
-    def _timeout_digitado(self) -> int:
+    @staticmethod
+    def _inteiro(texto: str, campo: str) -> int:
         """Converte o texto do campo; a faixa válida é conferida por PortaSerial."""
-        texto = self.editTimeout.text().strip()
+        texto = texto.strip()
         if not texto:
-            raise ErroConexaoSerial("Informe o timeout em milissegundos.")
+            raise ErroConexaoSerial(f"Informe {campo} em milissegundos.")
         try:
-            timeout_ms = int(texto)
+            valor = int(texto)
         except ValueError:
             raise ErroConexaoSerial(
-                "O timeout deve ser um número inteiro de milissegundos."
+                f"{campo[0].upper()}{campo[1:]} deve ser um número inteiro de milissegundos."
             ) from None
-        if timeout_ms < 0:
-            raise ErroConexaoSerial("O timeout não pode ser negativo.")
-        return timeout_ms
-
-    # ------------------------------------------------------------------
-    # Reflexo do estado na interface
-    # ------------------------------------------------------------------
-    def _atualizar_estado_visual(self) -> None:
-        conectado = self.porta_serial.conectado
-
-        editavel = not conectado and not self._consultando_portas
-        self.botaoConectar.setEnabled(editavel)
-        self.botaoDesconectar.setEnabled(conectado)
-
-        # Os parâmetros ficam travados enquanto a porta está aberta: mudá-los
-        # com a conexão de pé daria a falsa impressão de terem sido aplicados.
-        for campo in (
-            self.comboPortaSerial,
-            self.comboBaudRate,
-            self.editTimeout,
-            self.botaoAtualizarPortas,
-        ):
-            campo.setEnabled(editavel)
-
-        self._atualizar_rotulo_status()
-
-    def _atualizar_rotulo_status(self) -> None:
-        parametros = self.porta_serial.parametros
-
-        if parametros is None:
-            self.labelStatusConexao.setText("Desconectado")
-            self.labelStatusConexao.setStyleSheet(
-                f"color: {self._COR_DESCONECTADO};"
-            )
-            self.labelDetalheConexao.setText("Nenhuma porta aberta")
-            return
-
-        inicio = self.dateInicioSessao.date().toString("dd/MM/yyyy")
-        self.labelStatusConexao.setText(f"Conectado — {parametros.descricao}")
-        self.labelStatusConexao.setStyleSheet(f"color: {self._COR_CONECTADO};")
-        self.labelDetalheConexao.setText(
-            f"Timeout de {parametros.timeout_ms} ms · "
-            f"sessão de monitoramento iniciada em {inicio}"
-        )
-
-    def _avisar(self, mensagem: str) -> None:
-        QMessageBox.warning(self, "Comunicação serial", mensagem)
+        if valor < 0:
+            raise ErroConexaoSerial(f"{campo[0].upper()}{campo[1:]} não aceita valor negativo.")
+        return valor
