@@ -11,6 +11,12 @@ Projeto da disciplina **Desenvolvimento de Aplicações Computacionais** — Uno
 - [Equipe](#equipe)
 - [Visão Geral](#visão-geral)
 - [Escopo das Entregas](#escopo-das-entregas)
+- [Entrega A1/5 — Threads, Protocolo Serial e MVC](#entrega-a15--threads-protocolo-serial-e-mvc)
+  - [As três threads](#as-três-threads)
+  - [Protocolo serial](#protocolo-serial)
+  - [Padrão MVC por camada](#padrão-mvc-por-camada)
+  - [Banco de dados na A1/5](#banco-de-dados-na-a15)
+  - [Novos campos do `config.json`](#novos-campos-do-configjson)
 - [Entrega A1/2 — Persistência, Logs e Robustez](#entrega-a12--persistência-logs-e-robustez)
   - [Persistência em SQLite](#persistência-em-sqlite)
   - [Transações atômicas e tratamento de erros](#transações-atômicas-e-tratamento-de-erros)
@@ -28,11 +34,16 @@ Projeto da disciplina **Desenvolvimento de Aplicações Computacionais** — Uno
 - [Organização do Trabalho em Equipe](#organização-do-trabalho-em-equipe)
 - [Tecnologias](#tecnologias)
 - [Como Executar](#como-executar)
+  - [Com o Arduino UNO](#com-o-arduino-uno-bancada)
+  - [Sem hardware (placa virtual)](#sem-hardware-placa-virtual)
+- [Checklist da Entrega A1/5](#checklist-da-entrega-a15)
 - [Checklist da Entrega A1/2](#checklist-da-entrega-a12)
 - [Checklist da Entrega A1/1](#checklist-da-entrega-a11)
+- [Forma de Entrega e Apresentação (A1/5)](#forma-de-entrega-e-apresentação-a15)
 - [Forma de Entrega e Apresentação (A1/2)](#forma-de-entrega-e-apresentação-a12)
 - [Forma de Entrega e Apresentação (A1/1)](#forma-de-entrega-e-apresentação-a11)
 - [Regras Obrigatórias do Git](#regras-obrigatórias-do-git)
+- [Critérios Avaliativos (A1/5)](#critérios-avaliativos-a15)
 - [Critérios Avaliativos (A1/2)](#critérios-avaliativos-a12)
 - [Critérios Avaliativos (A1/1)](#critérios-avaliativos-a11)
 - [Opção de Tema Livre](#-opção-de-tema-livre-prototipagem-de-microcontroladores)
@@ -41,12 +52,12 @@ Projeto da disciplina **Desenvolvimento de Aplicações Computacionais** — Uno
 
 ## Equipe
 
-| Integrante | Usuário GitHub | A1/1 | A1/2 |
-|---|---|---|---|
-| Samuel De Marco | [@SamuelDeMarco-Dev](https://github.com/SamuelDeMarco-Dev) | Arquitetura MVC, janela principal e Dashboard de Monitoramento | Camada `database/`, esquema e transações, corte emergencial atômico, `main.py` de inicialização e integração final |
-| Davy Josias Scheuermann | [@Davyjosias01](https://github.com/Davyjosias01) | Painel de Configuração da Comunicação Serial | Log de auditoria, `config.json`, tela serial persistente, modo de falha simulada e README |
-| Lucas Zamoner Locatelli | [@lucaszlocatelli](https://github.com/lucaszlocatelli) | Diálogo Modal de Limites e Parâmetros | Regras de limite no SQLite, validações do diálogo, repositório de dispositivos e auditoria de SQL |
-| Arthur De Marco Faggion | [@ArthurDeMarcoF](https://github.com/ArthurDeMarcoF) | Histórico de Eventos e Registros | Eventos no SQLite, filtros e limpeza transacional do histórico, testes de rollback e roteiro de demonstração |
+| Integrante | Usuário GitHub | A1/1 | A1/2 | A1/5 |
+|---|---|---|---|---|
+| Samuel De Marco | [@SamuelDeMarco-Dev](https://github.com/SamuelDeMarco-Dev) | Arquitetura MVC, janela principal e Dashboard de Monitoramento | Camada `database/`, esquema e transações, corte emergencial atômico, `main.py` de inicialização e integração final | Protocolo, firmware e placa virtual; `SerialWorker`; `DatabaseWorker` e tabela `leituras`; `AplicacaoController`; Dashboard MVC com gráfico em tempo real e histórico (#56–#60) |
+| Davy Josias Scheuermann | [@Davyjosias01](https://github.com/Davyjosias01) | Painel de Configuração da Comunicação Serial | Log de auditoria, `config.json`, tela serial persistente, modo de falha simulada e README | Tela serial MVC com as fases do handshake, velocidade negociada e taxa de amostragem; README da A1/5 (#61, #65) |
+| Lucas Zamoner Locatelli | [@lucaszlocatelli](https://github.com/lucaszlocatelli) | Diálogo Modal de Limites e Parâmetros | Regras de limite no SQLite, validações do diálogo, repositório de dispositivos e auditoria de SQL | Diálogo de limites MVC com gravação assíncrona e limites no `config.json`; testes de concorrência, resiliência serial e auditoria de camadas (#62, #64) |
+| Arthur De Marco Faggion | [@ArthurDeMarcoF](https://github.com/ArthurDeMarcoF) | Histórico de Eventos e Registros | Eventos no SQLite, filtros e limpeza transacional do histórico, testes de rollback e roteiro de demonstração | Histórico MVC com consultas no `DatabaseWorker` e filtro por dispositivo; bancada com Arduino UNO e roteiro do seminário (#63, #66) |
 
 > ⚠️ Todos os integrantes devem possuir commits registrados em seu próprio usuário do GitHub. Ver [Regras Obrigatórias do Git](#regras-obrigatórias-do-git).
 
@@ -56,22 +67,23 @@ Projeto da disciplina **Desenvolvimento de Aplicações Computacionais** — Uno
 
 ## Visão Geral
 
-O software supervisor recebe continuamente as amostras brutas dos sensores do microcontrolador — via comunicação serial no futuro, ou **simuladas nesta entrega** — e:
+O software supervisor recebe continuamente as amostras dos sensores do microcontrolador pela **porta serial** (Arduino UNO ou a placa virtual de `tools/simulador_placa.py`) e:
 
 1. Processa e apresenta a telemetria elétrica (tensão, corrente e potência);
 2. Monitora o estado binário do disjuntor/chave de proteção;
 3. Permite atuação sobre a carga (relé) e parametrização de limites de alerta;
 4. Centraliza todo o histórico de eventos em uma tabela de auditoria;
 5. Persiste eventos, limites e estado dos dispositivos em **SQLite**, com transações atômicas;
-6. Guarda a configuração da comunicação em **`data/config.json`** e registra a operação em **`logs/smartgrid.log`**.
+6. Guarda a configuração da comunicação em **`data/config.json`** e registra a operação em **`logs/smartgrid.log`**;
+7. Mantém a serial e o banco em **threads próprias**, sem travar a interface.
 
 ```
-┌──────────────────┐        Serial (Unidade 4)        ┌──────────────────────┐
-│  Microcontrolador│  ──────  V_RMS, I_RMS, estado ──▶ │                      │
-│  (ACS712 /       │                                   │  SmartGrid Desktop   │
-│   ZMPT101B /     │  ◀──────  RELAY_OFF, setpoints ── │  (IHM Supervisória)  │
-│   Relé / Disj.)  │                                   │                      │
-└──────────────────┘                                   └──────────────────────┘
+┌──────────────────┐   Serial: $CORPO*CS, 9600 → baud   ┌──────────────────────┐
+│  Arduino UNO     │  ── TLM: tensão, corrente, disj. ─▶ │                      │
+│  (potenciômetros │                                     │  SmartGrid Desktop   │
+│   ou ZMPT101B /  │  ◀── HS, SYNC, PING, RELE, BYE ──── │  (IHM Supervisória)  │
+│   ACS712, relé)  │                                     │                      │
+└──────────────────┘                                     └──────────────────────┘
 ```
 
 ---
@@ -82,9 +94,240 @@ O software supervisor recebe continuamente as amostras brutas dos sensores do mi
 |---|---|---|
 | **A1/1** | 17/08/2026 | Arquitetura MVC, navegação entre janelas, layout responsivo e interface gráfica completos. **Sem conexão física com o hardware.** |
 | **A1/2** | 19/10/2026 | **Persistência, Logs e Robustez:** SQLite com integridade relacional, transações atômicas (ACID), configuração em JSON, log de auditoria e tratamento preventivo de erros. |
-| **Final** | Dezembro | Integração serial real, processamento de telemetria, atuação sobre o relé, proteção por setpoint e auditoria completa. |
+| **A1/5** | Dezembro/2026 | **Threads, protocolo e MVC estrito:** serial e SQLite fora da GUI, protocolo com handshake e checksum, telemetria real do Arduino UNO, histórico de medições, bancada e seminário. Ver [Entrega A1/5](#entrega-a15--threads-protocolo-serial-e-mvc). |
 
-> Na entrega A1/1 a aplicação **não precisa estar fisicamente conectada ao hardware** — a integração serial ocorrerá na Unidade 4. No entanto, toda a arquitetura de código em camadas (MVC), navegação entre janelas, layout responsivo e interface gráfica devem estar prontos.
+> Nas entregas A1/1 e A1/2 a aplicação não se conectava ao hardware. A comunicação serial real entrou na A1/5.
+
+---
+
+## Entrega A1/5 — Threads, Protocolo Serial e MVC
+
+Até a A1/2 a telemetria era gerada dentro da própria GUI. Na A1/5 o SmartGrid conversa de verdade com a placa (Arduino UNO ou placa virtual):
+
+- a **serial** e o **SQLite** rodam em threads próprias, e a thread da GUI só recebe sinais;
+- o link com a placa segue um **protocolo próprio**, com checksum, handshake a 9600 bps, negociação de velocidade, watchdog e detecção de queda;
+- todas as telas seguem **MVC estrito**: a View desenha, o Controller coordena e o Model guarda regras, protocolo e acesso a dados;
+- as medições são gravadas na tabela `leituras`, e o gráfico do Dashboard alterna entre **tempo real** e **histórico**.
+
+### As três threads
+
+| Thread | Classe | Responsabilidade |
+|---|---|---|
+| **GUI** (principal) | Views, controllers das telas, `AplicacaoController` | Desenhar, receber cliques e mostrar o que os workers devolvem. Nunca abre porta nem banco. |
+| **Serial** | `SerialWorker(QThread)` — `models/serial_worker.py` | Abre a porta a 9600 bps, faz o handshake, recebe `TLM`, envia `PING` e `RELE`, detecta a queda do link. Um worker novo nasce a cada **Conectar**. |
+| **Banco** | `DatabaseWorker(QThread)` — `models/database_worker.py` | Fila única de tarefas do SQLite: leituras em lote, eventos de auditoria, consultas históricas e qualquer operação de repositório pedida pelas telas. Existe durante toda a execução. |
+
+O `AplicacaoController` (`controllers/aplicacao_controller.py`) cria, liga e encerra os dois workers. Os sinais entre threads usam a conexão enfileirada do Qt, então todo slot que mexe em widget roda na thread da GUI.
+
+```mermaid
+flowchart LR
+    subgraph GUI["Thread principal (GUI)"]
+        direction TB
+        V["Views<br/>widgets e sinais"]
+        C["Controllers das telas"]
+        A["AplicacaoController<br/>dono das threads"]
+        V -- "ações do operador" --> C
+        C -- "mostrar_*()" --> V
+        C -- "conectar / desconectar" --> A
+        A -- "barramento: leituras,<br/>estado do link" --> C
+    end
+    subgraph SER["Thread SerialWorker"]
+        S["porta serial<br/>handshake e telemetria"]
+    end
+    subgraph DB["Thread DatabaseWorker"]
+        D["fila de tarefas<br/>SQLite"]
+    end
+    A -- "start, enviar_rele, parar" --> S
+    S -- "estado, leituras, disjuntor" --> A
+    A -- "gravar_leitura" --> D
+    C -- "executar, consultar_leituras" --> D
+    D -- "callbacks e resultados" --> C
+```
+
+**Sinais que cruzam as threads:**
+
+| Origem | Sinal | Destino | Para quê |
+|---|---|---|---|
+| `SerialWorker` | `estado_alterado(nome, detalhe)` | `AplicacaoController` → `barramento.estado_link_alterado` | Fase do link na tela serial; vira `status_conexao_alterado` e eventos de Status/Alerta |
+| `SerialWorker` | `velocidade_negociada(int)` | `AplicacaoController.velocidade_negociada` | Velocidade confirmada no `SYNC`, exibida na tela serial |
+| `SerialWorker` | `leitura_recebida(Leitura)` | `barramento` (Dashboard) e `DatabaseWorker.gravar_leitura` | Indicadores, gráfico em tempo real e tabela `leituras` |
+| `SerialWorker` | `disjuntor_reportado(EstadoDisjuntor)` | `AplicacaoController` | Disparo espontâneo da proteção na placa |
+| `SerialWorker` | `link_perdido(motivo)` | `AplicacaoController` | Cabo removido, porta sumiu ou silêncio da placa |
+| GUI | `enviar_rele(fechado)` | fila de comandos do `SerialWorker` | `RELE,0/1` depois do corte ou religamento confirmado no banco |
+| GUI | `executar(funcao, ..., ao_concluir, ao_falhar)` | fila do `DatabaseWorker` | Regras, histórico, `config.json`, descoberta de portas e corte emergencial fora da GUI |
+| `DatabaseWorker` | `leituras_consultadas(filtro, lista)` / `consulta_falhou(msg)` | `DashboardController` | Gráfico em modo histórico |
+| `DatabaseWorker` | `barramento.evento_persistido(Evento)` | `HistoricoController` | Linha nova no histórico, só depois do COMMIT |
+
+**Encerramento cooperativo:** ao fechar a janela, `QApplication.aboutToQuit` chama `AplicacaoController.encerrar()`. Ele pede `parar()` à serial (que envia `BYE` e fecha a porta), espera a thread com `wait()`, e só então para o banco, que grava o que ainda estava na fila antes de sair. Todo worker tem `finished` ligado a `deleteLater`.
+
+### Protocolo serial
+
+Definido em `models/protocolo.py` (Python puro, sem Qt e sem pyserial) e implementado do lado da placa em `firmware/smartgrid_placa/smartgrid_placa.ino` e na placa virtual `tools/simulador_placa.py`.
+
+**Formato do pacote** — uma linha ASCII de até 64 caracteres:
+
+```text
+$CORPO*CS\n
+```
+
+- `$` marca o início e `*` separa o checksum;
+- `CORPO` são campos separados por vírgula, e o primeiro campo é o comando;
+- `CS` é o **XOR de todos os bytes do corpo**, em dois dígitos hexadecimais maiúsculos (o mesmo esquema das sentenças NMEA). Exemplo: em `SYNC`, `0x53 ^ 0x59 ^ 0x4E ^ 0x43 = 0x07`, então o pacote é `$SYNC*07`;
+- linha sem `$` ou `*`, com checksum errado, maior que 64 bytes ou com campos inválidos é **descartada** e contada em `SerialWorker.pacotes_descartados`, sem derrubar o link.
+
+| Comando | Sentido | Exemplo de pacote | Significado |
+|---|---|---|---|
+| `HS,<baud>,<intervalo_ms>` | Desktop → placa | `$HS,38400,1000*25` | Handshake: velocidade alvo e período da telemetria |
+| `ACK,HS,<baud>,<intervalo_ms>` | Placa → desktop | `$ACK,HS,38400,1000*40` | Handshake aceito (ainda a 9600 bps) |
+| `NAK,<motivo>` | Placa → desktop | `$NAK,velocidade*76` | Handshake recusado (`campos`, `velocidade` ou `intervalo`) |
+| `SYNC` | Desktop → placa | `$SYNC*07` | Primeiro pacote já na velocidade nova |
+| `ACK,SYNC` | Placa → desktop | `$ACK,SYNC*62` | Velocidade confirmada; telemetria vai começar |
+| `TLM,<seq>,<tensao>,<corrente>,<disjuntor>` | Placa → desktop | `$TLM,42,220.5,4.750,1*61` | Amostra: V, A e disjuntor (1 fechado, 0 aberto) |
+| `PING` | Desktop → placa | `$PING*10` | Mantém o link vivo (a cada 1 s) |
+| `RELE,<0/1>` | Desktop → placa | `$RELE,0*02` | Abre (0, corte) ou fecha (1, religamento) a carga |
+| `ACK,RELE,<0/1>` | Placa → desktop | `$ACK,RELE,0*67` | Relé acionado |
+| `BYE` | Desktop → placa | `$BYE*5E` | Encerramento: a placa volta a aguardar link |
+
+Velocidades aceitas: **exatamente 9600, 19200, 38400 e 115200 bps**. A conexão **sempre começa em 9600**, que é a única velocidade que a placa escuta ao ligar. O valor escolhido na tela é a velocidade *alvo* da negociação.
+
+**Máquina de estados do link:**
+
+```mermaid
+stateDiagram-v2
+    [*] --> AguardandoLink
+    AguardandoLink: Aguardando link (9600 bps, placa em silêncio)
+    Handshake: Handshake a 9600 bps
+    TrocaVelocidade: Troca para a velocidade alvo
+    Telemetria: Telemetria ativa
+    LinkPerdido: Link perdido
+
+    AguardandoLink --> Handshake: desktop abre a porta e envia HS
+    Handshake --> TrocaVelocidade: placa responde ACK,HS
+    Handshake --> Handshake: NAK ou sem ACK no prazo, tenta a velocidade menor
+    Handshake --> LinkPerdido: nenhuma velocidade respondeu
+    TrocaVelocidade --> Telemetria: SYNC e ACK,SYNC
+    TrocaVelocidade --> Handshake: sem SYNC em 2 s, placa volta a 9600 e desktop tenta a velocidade menor
+    Telemetria --> Telemetria: TLM a cada intervalo, PING a cada 1 s, RELE e ACK,RELE
+    Telemetria --> AguardandoLink: BYE, ou watchdog de 5 s sem mensagens do host
+    Telemetria --> LinkPerdido: cabo removido ou silêncio acima de 3 x intervalo + timeout
+    LinkPerdido --> [*]
+```
+
+| Situação | Tempo | Quem decide | Resultado |
+|---|---|---|---|
+| `HS` sem `ACK` (ou com `NAK`) | 6 s até o primeiro `ACK`, porque o UNO reinicia quando a porta abre; 3 s depois disso | `SerialWorker` | Tenta a próxima velocidade menor |
+| `SYNC` não confirmado | 2 s na placa | Placa e `SerialWorker` | Placa volta a 9600; desktop recomeça o `HS` com a velocidade menor |
+| Host em silêncio | 5 s (watchdog) | Placa | Volta a aguardar link a 9600 |
+| Placa em silêncio durante a telemetria | 3 × intervalo + timeout | `SerialWorker` | **Link perdido** |
+
+**O que a tela Comunicação Serial mostra** (`EstadoLink`, em `models/estado_link.py`):
+
+| `EstadoLink` | Rótulo na tela | Cor | Formulário |
+|---|---|---|---|
+| `DESCONECTADO` | Desconectado | cinza | editável |
+| `ABRINDO_PORTA` | Abrindo porta | azul | travado |
+| `HANDSHAKE` | Handshake a 9600 bps | azul | travado |
+| `NEGOCIANDO` | Negociando velocidade | âmbar | travado |
+| `TELEMETRIA` | Telemetria ativa + velocidade negociada | verde | travado |
+| `LINK_PERDIDO` | Link perdido + motivo | vermelho | editável, pronto para reconectar |
+
+Não há reconexão automática. Depois de **Link perdido**, o operador confere o cabo, atualiza as portas e clica **Conectar**, o que cria um `SerialWorker` novo.
+
+### Padrão MVC por camada
+
+| Camada | Pasta | O que mora lá | Por quê |
+|---|---|---|---|
+| **Model** | `models/` | Entidades (`Leitura`, `Evento`, `EstadoDisjuntor`, `EstadoLink`), regras (`AvaliadorProtecao`, `validar_regras`, validações de `PortaSerial`), protocolo, repositórios SQL, `ConfigManager`, log e os workers `SerialWorker` e `DatabaseWorker` | Regra de negócio testável sem abrir janela. Nenhum arquivo importa `PyQt6.QtWidgets`. |
+| **View** | `views/` + `ui/` | `ui/*.ui` (Qt Designer) e `ui/*_ui.py` (gerados pelo `pyuic6`); `views/*_view.py` monta os widgets, emite um sinal por ação do operador e expõe métodos `mostrar_*`/`habilitar_*` | A tela só desenha e repassa ações. Não valida, não consulta banco e não fala com a serial, então pode ser redesenhada sem mexer na regra. |
+| **Controller** | `controllers/` | Um `QObject` por tela, que recebe a View, liga os sinais e chama Model e workers; `AplicacaoController` (threads) e `MainWindowController` (shell) | Coordena o fluxo: traduz ação em chamada ao Model e resultado em valores prontos para a View. Não contém SQL nem acesso a driver. |
+| **Banco** | `database/` | Conexão (`timeout`, `foreign_keys`, `journal_mode=WAL`), transações e esquema | Infraestrutura usada só pelos repositórios. |
+
+| Tela | View | Controller | Model principal |
+|---|---|---|---|
+| Dashboard | `views/dashboard_view.py` | `controllers/dashboard_controller.py` | `AvaliadorProtecao`, `RepositorioLeituras` (via `DatabaseWorker`), `ServicoCorteEmergencial` |
+| Comunicação Serial | `views/serial_config_view.py` | `controllers/serial_config_controller.py` | `PortaSerial`, `EstadoLink`, `ConfigManager` |
+| Limites (`QDialog`) | `views/limites_dialog_view.py` | `controllers/limites_dialog_controller.py` | `validar_regras` (`models/validador_limites.py`), `salvar_limites` (`models/servico_limites.py`), `RepositorioRegras` |
+| Histórico | `views/historico_view.py` | `controllers/historico_controller.py` | `RepositorioEventos`, `FiltroHistorico` e `ConsultaHistorico` (`models/historico.py`) |
+| Janela principal | `views/main_window_view.py` | `controllers/main_window_controller.py` | `ModoFalhaSimulada` |
+
+Cada controller fica preso à sua View com `setParent(view)`, para viver e morrer junto com ela. As regras de camada são verificadas automaticamente por `tests/test_arquitetura.py`:
+
+- `models/` não importa `PyQt6.QtWidgets`;
+- `views/` não importa `sqlite3`, `serial`, `database`, repositórios, workers nem controllers;
+- `controllers/` não importa `sqlite3`, `serial` nem `database`.
+
+### Banco de dados na A1/5
+
+A A1/5 acrescenta a tabela `leituras` e passa a ligar os eventos de corte e disparo ao dispositivo afetado (`eventos.dispositivo_id`). O banco abre em `journal_mode=WAL`, para que a consulta histórica não bloqueie a gravação das leituras.
+
+```mermaid
+erDiagram
+    dispositivos ||--o{ eventos : "dispositivo_id (ON DELETE SET NULL)"
+
+    dispositivos {
+        INTEGER id PK "AUTOINCREMENT"
+        TEXT tag UK "NOT NULL - ex.: DISJ-01"
+        TEXT tipo "NOT NULL"
+        TEXT status "NOT NULL - CHECK IN (ABERTO, FECHADO)"
+        TEXT ultima_atualizacao "NOT NULL"
+    }
+    eventos {
+        INTEGER id PK "AUTOINCREMENT"
+        TEXT data_hora "NOT NULL"
+        TEXT tipo_evento "NOT NULL - CHECK IN (Comando, Alerta, Status)"
+        TEXT valor_medido
+        TEXT descricao "NOT NULL"
+        INTEGER dispositivo_id FK "REFERENCES dispositivos(id)"
+    }
+    regras_limites {
+        INTEGER id PK "AUTOINCREMENT"
+        TEXT nome UK "NOT NULL"
+        TEXT grandeza "NOT NULL - CHECK IN (CORRENTE, TENSAO, POTENCIA)"
+        REAL limite_maximo "NOT NULL - CHECK > 0"
+        INTEGER ativa "NOT NULL - CHECK IN (0, 1)"
+    }
+    leituras {
+        INTEGER id PK "AUTOINCREMENT"
+        TEXT data_hora "NOT NULL - indice idx_leituras_data_hora"
+        REAL tensao "NOT NULL - CHECK >= 0"
+        REAL corrente "NOT NULL - CHECK >= 0"
+        REAL potencia "NOT NULL - CHECK >= 0"
+    }
+```
+
+| Tabela | Novidade na A1/5 |
+|---|---|
+| `leituras` | Cada `TLM` recebido vira uma linha, com `potencia = tensao × corrente`. O `DatabaseWorker` grava as leituras acumuladas na fila numa única transação. O índice por `data_hora` atende às consultas do gráfico: **últimas N leituras** ou **intervalo de data/hora**. |
+| `eventos` | Corte, religamento e disparo espontâneo gravam `dispositivo_id`. O Histórico mostra e filtra essa coluna; eventos sem vínculo aparecem como **Sem dispositivo**. |
+
+### Novos campos do `config.json`
+
+| Chave | Padrão | Regra | Quem grava |
+|---|---|---|---|
+| `baud_rate` | `115200` | **apenas** 9600, 19200, 38400 ou 115200 (velocidade alvo) | Tela serial, a cada conexão |
+| `taxa_amostragem_ms` | `1000` | inteiro de 100 a 5000: período da telemetria pedido no `HS` | Tela serial, a cada conexão |
+| `limites_iniciais.tensao` / `.corrente` | `230.0` / `15.0` | números maiores que zero | Diálogo de limites, ao salvar as regras |
+
+```json
+{
+  "porta_com": "COM3",
+  "baud_rate": 38400,
+  "timeout_ms": 1000,
+  "limites_iniciais": {
+    "corrente": 15.0,
+    "tensao": 230.0,
+    "potencia": 3500.0
+  },
+  "taxa_amostragem_ms": 500,
+  "simular_falha_corte": false
+}
+```
+
+A taxa de amostragem é editada na tela **Comunicação Serial**, validada antes de conectar e aplicada já na conexão pedida. Ler e gravar o JSON acontece no `DatabaseWorker`, fora da GUI.
+
+### Roteiro do seminário
+
+A divisão de falas, os tempos e as perguntas prováveis da banca estão em [`docs/roteiro-demonstracao.md`](docs/roteiro-demonstracao.md). A montagem do circuito, a gravação do firmware e os ensaios com o Arduino UNO estão em [`docs/bancada.md`](docs/bancada.md).
 
 ---
 
@@ -184,7 +427,7 @@ Se qualquer passo falhar, nada é gravado: os dispositivos continuam como estava
 | Tela | Entradas recusadas |
 |---|---|
 | Diálogo de Limites | nome vazio ou duplicado, limite vazio, **letras em campo numérico**, valor negativo ou zero |
-| Comunicação Serial | porta não selecionada, timeout vazio, com letras, negativo ou fora de 100 a 10 000 ms |
+| Comunicação Serial | porta não selecionada, timeout vazio, com letras, negativo ou fora de 100 a 10 000 ms; taxa de amostragem fora de 100 a 5000 ms |
 | Histórico | data inicial de filtro inválida |
 
 Erros de banco (`sqlite3.Error`) e de disco são capturados nos controllers, viram `QMessageBox.critical` e `[ERROR]` no log, e a interface não quebra com traceback. Nenhum `except: pass` é usado.
@@ -196,9 +439,10 @@ Gerenciada por `ConfigManager` (`models/config_manager.py`). Guarda o que muda d
 | Chave | Padrão | Regra |
 |---|---|---|
 | `porta_com` | `"COM1"` | texto não vazio |
-| `baud_rate` | `115200` | 9600, 19200, 38400, 57600 ou 115200 |
+| `baud_rate` | `115200` | 9600, 19200, 38400 ou 115200 (57600 saiu na A1/5) |
 | `timeout_ms` | `1000` | inteiro de 100 a 10 000 (milissegundos) |
 | `limites_iniciais` | `corrente` 15.0, `tensao` 230.0, `potencia` 3500.0 | as três chaves, números maiores que zero (A, V e W) |
+| `taxa_amostragem_ms` | `1000` | inteiro de 100 a 5000 (A1/5) |
 | `simular_falha_corte` | `false` | verdadeiro ou falso |
 
 ```json
@@ -219,7 +463,7 @@ Gerenciada por `ConfigManager` (`models/config_manager.py`). Guarda o que muda d
 - **JSON corrompido:** o app abre com os padrões e registra `[WARNING]`, sem sobrescrever o arquivo estragado.
 - **Campo inválido ou ausente:** só aquele campo volta ao padrão (`[WARNING]`), os demais são mantidos.
 - **Gravação atômica:** `ConfigManager.salvar()` grava em `config.json.tmp` e troca o arquivo com `os.replace`, para que uma interrupção nunca deixe o JSON pela metade.
-- **Tela serial:** abre com a última configuração e salva porta, baud rate e timeout a cada conexão bem-sucedida. Se a porta salva não existir na máquina, seleciona a primeira disponível (`[WARNING]`).
+- **Tela serial:** abre com a última configuração e salva porta, baud rate, timeout e, desde a A1/5, a taxa de amostragem a cada conexão. Se a porta salva não existir na máquina, seleciona a primeira disponível (`[WARNING]`).
 - **Limites iniciais de alerta:** na criação do banco, `Database.init_db(config.limites_iniciais)` usa esses valores para semear a tabela `regras_limites`. Daí em diante a fonte oficial dos limites é o banco, editado pelo diálogo de limites. Para aplicar novos limites iniciais, edite o JSON e apague `data/smartgrid.db`.
 
 ### Log de auditoria (`logs/smartgrid.log`)
@@ -395,57 +639,46 @@ Toda a atividade do sistema é centralizada na `QTableWidget` de registros:
 
 ```
 SmartGrid/
-├── main.py                        # Ponto de entrada: log → config → banco → telas
+├── main.py                        # Ponto de entrada: log → config → banco → threads → telas
 ├── requirements.txt
 ├── requirements-dev.txt           # requirements.txt + pytest
-├── .gitignore
-├── database/                      # Conexão e esquema SQLite
-│   ├── __init__.py
-│   ├── connection.py              # Database: init_db, conectar (timeout, pragmas), transacao
-│   └── schema.py                  # DDL das 3 tabelas e dados iniciais
-├── controllers/                   # Lógica das janelas e eventos (Signals & Slots)
-│   ├── __init__.py
-│   ├── dashboard_controller.py
-│   ├── historico_controller.py
-│   ├── limites_dialog_controller.py
-│   ├── main_window_controller.py  # Shell, barra de status e atalho do modo de teste
-│   └── serial_config_controller.py
-├── models/                        # Regras de negócio, entidades e repositórios
-│   ├── __init__.py
-│   ├── aquisicao.py               # Serviço que publica telemetria simulada
-│   ├── barramento.py              # Canal de sinais compartilhado entre telas
-│   ├── config_manager.py          # Leitura e escrita do data/config.json
-│   ├── estado_disjuntor.py
-│   ├── evento.py
-│   ├── gravador_eventos.py        # Grava no SQLite os eventos publicados no barramento
-│   ├── leitura.py
-│   ├── log_config.py              # Configuração do logs/smartgrid.log
-│   ├── modo_falha.py              # Interruptor do modo de falha simulada
-│   ├── porta_serial.py            # Validação e simulação da porta serial
-│   ├── regra_alerta.py
-│   ├── repositorio_dispositivos.py
-│   ├── repositorio_eventos.py
-│   ├── repositorio_regras.py
+├── database/                      # Conexão (timeout, foreign_keys, WAL), transações e esquema
+│   ├── connection.py
+│   └── schema.py                  # DDL das 4 tabelas e dados iniciais
+├── models/                        # Regras, entidades, protocolo, repositórios e workers
+│   ├── protocolo.py               # Pacotes $CORPO*CS, velocidades e prazos do link
+│   ├── serial_worker.py           # QThread da serial: handshake, telemetria, queda de link
+│   ├── database_worker.py         # QThread do SQLite: fila de gravações e consultas
+│   ├── estado_link.py             # Fases do link mostradas na tela serial
+│   ├── barramento.py              # Sinais compartilhados entre as telas
+│   ├── avaliador_protecao.py      # Regra de proteção por setpoint e limites
+│   ├── validador_limites.py       # Validação das regras do diálogo de limites
+│   ├── servico_limites.py         # Grava regras no SQLite e limites no config.json
 │   ├── servico_corte.py           # Corte emergencial transacional
-│   └── simulador_telemetria.py
+│   ├── porta_serial.py            # Validação de porta, velocidade, timeout e taxa
+│   ├── config_manager.py          # data/config.json
+│   ├── repositorio_*.py           # Dispositivos, eventos, leituras e regras (SQL com ?)
+│   └── ...                        # leitura, evento, estado_disjuntor, historico, log, modo de falha
+├── views/                         # Widgets e sinais de cada tela (sem regra, sem I/O)
+│   ├── dashboard_view.py
+│   ├── serial_config_view.py
+│   ├── limites_dialog_view.py
+│   ├── historico_view.py
+│   └── main_window_view.py
+├── controllers/                   # QObject por tela + orquestração das threads
+│   ├── aplicacao_controller.py    # Cria, liga e encerra SerialWorker e DatabaseWorker
+│   ├── dashboard_controller.py
+│   ├── serial_config_controller.py
+│   ├── limites_dialog_controller.py
+│   ├── historico_controller.py
+│   └── main_window_controller.py
+├── ui/                            # .ui do Qt Designer, _ui.py gerados pelo pyuic6 e estilo.qss
+├── firmware/smartgrid_placa/      # Firmware do Arduino UNO
+├── tools/simulador_placa.py       # Placa virtual numa pty (Linux/macOS)
 ├── tests/                         # Testes automatizados (pytest)
-├── docs/
-│   └── roteiro-demonstracao.md
+├── docs/                          # bancada.md e roteiro-demonstracao.md
 ├── data/                          # smartgrid.db e config.json (gerados, fora do Git)
 ├── logs/                          # smartgrid.log (gerado, fora do Git)
-├── ui/                            # Arquivos .ui e versões geradas pelo pyuic6
-│   ├── __init__.py
-│   ├── dashboard.ui
-│   ├── dashboard_ui.py
-│   ├── estilo.qss                 # Folha de estilo global
-│   ├── historico.ui
-│   ├── historico_ui.py
-│   ├── limites_dialog.ui
-│   ├── limites_dialog_ui.py
-│   ├── main_window.ui
-│   ├── main_window_ui.py
-│   ├── serial_config.ui
-│   └── serial_config_ui.py
 └── README.md
 ```
 
@@ -454,10 +687,10 @@ SmartGrid/
 - **Nenhuma regra de negócio ou evento** deve ser escrita diretamente dentro dos arquivos gerados pelo Qt Designer;
 - Os arquivos `_ui.py` em `/ui` permanecem **completamente isolados** — são descrições de layout geradas pelo `pyuic6`;
 - Os arquivos `.ui` são mantidos como fonte editável do Qt Designer, e a folha `ui/estilo.qss` centraliza a aparência global;
-- Toda lógica de interação, validação visual e conexão de sinais vive em `/controllers`;
+- Os widgets e os sinais de cada tela vivem em `/views`; a coordenação entre View, Model e workers vive em `/controllers`;
 - As regras de negócio, entidades, repositórios SQLite (sempre com SQL parametrizado `?`), configuração, log, simulação de telemetria e serial ficam em `/models`;
 - A conexão, o esquema e as transações do banco ficam em `/database`. Nenhum SQL é escrito em `/ui` ou `/controllers`;
-- `main.py` permanece como ponto de entrada e composição, nesta ordem: configura o log, carrega o `config.json`, inicializa o banco, cria o gravador de eventos e o serviço de corte, monta a janela principal e registra as telas no shell.
+- `main.py` permanece como ponto de entrada e composição, nesta ordem: configura o log, carrega o `config.json`, inicializa o banco, cria o serviço de corte e o `AplicacaoController` (que sobe o `DatabaseWorker`), monta a janela principal e registra as Views no shell.
 
 ### Comunicação entre as Telas — Barramento de Eventos
 
@@ -465,12 +698,13 @@ Nenhum controller importa outro controller. As telas conversam por sinais public
 
 | Sinal | Emitido por | Consumido por |
 |---|---|---|
-| `leitura_recebida(Leitura)` | Serviço de aquisição | Dashboard (indicadores e gráfico) |
-| `evento_registrado(Evento)` | Qualquer tela (pedido de gravação) | `GravadorEventos` |
-| `evento_persistido(Evento)` | `GravadorEventos` e serviço de corte, **após o COMMIT** | Histórico de Eventos |
-| `estado_disjuntor_alterado(EstadoDisjuntor)` | Serviço de corte / aquisição | Dashboard (badge e comandos) |
+| `leitura_recebida(Leitura)` | `AplicacaoController` (vinda do `SerialWorker`) | Dashboard (indicadores e gráfico) |
+| `evento_registrado(Evento)` | Qualquer tela (pedido de gravação) | `DatabaseWorker` |
+| `evento_persistido(Evento)` | `DatabaseWorker` e serviço de corte, **após o COMMIT** | Histórico de Eventos |
+| `estado_disjuntor_alterado(EstadoDisjuntor)` | Serviço de corte / disjuntor reportado pela placa | Dashboard (badge e comandos) e `AplicacaoController` (`RELE` para a placa) |
 | `regras_alteradas(list[RegraAlerta])` | Diálogo de Limites | Dashboard (proteção por setpoint) |
-| `status_conexao_alterado(bool, str)` | Painel Serial | Janela principal, Dashboard e serviço de aquisição |
+| `status_conexao_alterado(bool, str)` | `AplicacaoController` | Janela principal e Dashboard |
+| `estado_link_alterado(str, str)` | `AplicacaoController` (vindo do `SerialWorker`) | Tela Comunicação Serial (fases do handshake) |
 
 ```python
 from models.barramento import barramento
@@ -482,7 +716,7 @@ barramento.registrar_evento(TipoEvento.COMANDO, "Corte de emergência acionado",
 
 Um evento só chega ao Histórico depois de gravado: a tela publica `evento_registrado`, o `DatabaseWorker` grava no SQLite e emite `evento_persistido`. Se a gravação falhar, o erro vai para o log e o evento não aparece na tabela.
 
-A janela principal expõe `registrar_pagina(nome, widget)` e `ir_para(nome)`. O `main.py` registra as Views do Dashboard e do Histórico, mantendo seus controllers como filhos das respectivas Views, e a tela `SerialConfigController` no `QStackedWidget` do shell.
+A janela principal expõe `registrar_pagina(nome, widget)` e `ir_para(nome)`. O `main.py` registra no `QStackedWidget` do shell as Views do Dashboard, da Comunicação Serial e do Histórico, mantendo cada controller como filho da sua View.
 
 ### Compilação das Telas do Qt Designer
 
@@ -498,7 +732,15 @@ pyuic6 -o ui/nome_da_tela_ui.py ui/nome_da_tela.ui
 
 O trabalho está dividido em **milestones e issues no GitHub**, com propriedade exclusiva de arquivos: cada tela é dona do seu `.ui`, do seu controller e dos seus models específicos. Assim ninguém edita o arquivo de ninguém e não há conflito de merge.
 
-**A1/2 — Persistência, Logs e Robustez:**
+**A1/5 — Threads, Protocolo e MVC:**
+
+| Milestone | Conteúdo |
+|---|---|
+| **A1/5 · M0 — Núcleo multithread e protocolo serial** ✅ | Protocolo e firmware, `SerialWorker`, `DatabaseWorker` com a tabela `leituras` e `AplicacaoController` |
+| **A1/5 · M1 — MVC estrito por tela** ✅ | Dashboard, Comunicação Serial, Limites e Histórico separados em View e Controller |
+| **A1/5 · M2 — Bancada, documentação e seminário** | Testes de concorrência e resiliência, bancada com Arduino UNO, roteiro do seminário e este README |
+
+**A1/2 — Persistência, Logs e Robustez (concluída):**
 
 | Milestone | Conteúdo |
 |---|---|
@@ -537,11 +779,12 @@ git pull --rebase origin main          # antes de abrir o PR
 | Item | Uso |
 |---|---|
 | **Python 3** | Linguagem base |
-| **PyQt6** | Framework da interface gráfica |
+| **PyQt6** | Framework da interface gráfica e das threads (`QThread`, sinais e slots) |
 | **Qt Designer** | Construção visual das telas (`.ui`) com uso de *Layouts* |
+| **Arduino IDE** | Gravação do firmware `firmware/smartgrid_placa` no Arduino UNO |
 | **pyqtgraph** | Gráfico de tendência de consumo |
 | **numpy** | Apoio ao processamento e manipulação de dados numéricos |
-| **pyserial** | Comunicação serial com o microcontrolador *(Unidade 4)* |
+| **pyserial** | Comunicação serial com o Arduino UNO (`SerialWorker`) |
 | **sqlite3** *(nativo)* | Banco relacional local `data/smartgrid.db` |
 | **json** *(nativo)* | Arquivo de configuração `data/config.json` |
 | **logging** *(nativo)* | Log de auditoria `logs/smartgrid.log` |
@@ -594,6 +837,54 @@ python main.py
 
 **Requisitos:** Python 3.10 ou superior. As dependências documentadas são exatamente as de `requirements.txt`: `PyQt6`, `pyqtgraph`, `numpy` e `pyserial`.
 
+### Com o Arduino UNO (bancada)
+
+O passo a passo completo, com lista de materiais, ligações e calibração, está em [`docs/bancada.md`](docs/bancada.md). Em resumo:
+
+1. Na Arduino IDE, abrir `firmware/smartgrid_placa/smartgrid_placa.ino`, selecionar a placa **Arduino Uno** e a porta, e usar **Upload/Carregar**. Com a placa aguardando link, o LED D13 pisca.
+2. **Fechar o Monitor Serial da IDE**, que ocupa a porta.
+3. Abrir o SmartGrid (`python main.py`) e ir em **Comunicação Serial**.
+4. Clicar **Atualizar portas** e escolher a porta da placa (`COM3` no Windows, `/dev/ttyACM0` no Linux, `/dev/cu.usbmodem...` no macOS).
+5. Escolher a velocidade alvo (9600, 19200, 38400 ou 115200), o timeout e a taxa de amostragem, e clicar **Conectar**.
+6. Acompanhar as fases: Abrindo porta → Handshake a 9600 bps → Negociando velocidade → **Telemetria ativa**. A velocidade negociada aparece logo abaixo, e o LED D13 fica aceso.
+
+Para ver a detecção de queda, arranque o cabo USB com a telemetria ativa: a tela mostra **Link perdido** e libera o formulário. Recoloque o cabo, clique **Atualizar portas** e **Conectar** de novo.
+
+### Sem hardware (placa virtual)
+
+`tools/simulador_placa.py` emula o Arduino num pseudoterminal (pty), com a mesma máquina de estados do firmware. Ele roda em **Linux e macOS**. No Windows, use uma distribuição Linux no **WSL 2 com WSLg** e rode o app e o simulador dentro dela (detalhes em [`docs/bancada.md`](docs/bancada.md#plano-b--placa-virtual)).
+
+Terminal 1, a partir da raiz do projeto:
+
+```bash
+python tools/simulador_placa.py
+```
+
+O simulador imprime o caminho da porta virtual, por exemplo `/dev/pts/3` no Linux ou `/dev/ttys004` no macOS. Deixe esse terminal aberto.
+
+Terminal 2, no mesmo ambiente:
+
+```bash
+python main.py
+```
+
+Em **Comunicação Serial**, digite no campo de porta o caminho impresso pelo simulador (o campo é editável), escolha a velocidade e clique **Conectar**. No terminal do simulador, digite a letra e tecle Enter:
+
+| Entrada | Efeito |
+|---|---|
+| `d` | Disparo da proteção: o disjuntor abre sem comando do operador |
+| `x` | Arranca o "cabo": fecha a pty e o app deve mostrar **Link perdido** |
+| `q` | Encerra o simulador |
+
+Para demonstrar a queda para uma velocidade menor, inicie o simulador ignorando o `SYNC` em 115200 e conecte escolhendo 115200. A negociação termina em 38400:
+
+```bash
+python tools/simulador_placa.py --falhar-sync 115200
+```
+
+A placa virtual valida a sequência de pacotes e os estados, mas não lê potenciômetros, não aciona relé e não impõe baud rate elétrico. Os valores de telemetria são sintéticos.
+
+
 ### Testes e auditoria SQL
 
 No PowerShell, instale as dependências de desenvolvimento e execute os testes:
@@ -603,14 +894,24 @@ python -m pip install -r requirements-dev.txt
 python -m pytest -q
 ```
 
-Os testes usam banco, configuração e log em pastas temporárias: não alteram o `data/` nem o `logs/` reais. As telas são testadas sem abrir janela.
+Os testes usam banco, configuração e log em pastas temporárias: não alteram o `data/` nem o `logs/` reais. As telas são testadas sem abrir janela. Os testes que abrem uma pty real (placa virtual) só rodam em Linux/macOS.
 
 | Arquivo | O que cobre |
 |---|---|
 | `tests/test_database.py` | Restrições `CHECK`, chave estrangeira e `init_db()` sem duplicar dados |
 | `tests/test_transacoes.py` | Rollback de dispositivos e eventos, gravação conjunta e limpeza atômica do histórico |
 | `tests/test_config_manager.py` | Criação do `config.json`, JSON corrompido, campos inválidos e gravação atômica |
-| `tests/test_serial_config_controller.py` | Tela serial lendo e gravando a configuração, validação do timeout e log |
+| `tests/test_serial_config_controller.py` | Tela serial em MVC: configuração no JSON, timeout e taxa de amostragem, fases do handshake, velocidade negociada, Link perdido e reconexão |
+| `tests/test_protocolo.py` | Enquadramento `$CORPO*CS`, checksum e máquina de estados da placa virtual *(pty: Linux/macOS)* |
+| `tests/test_serial_worker.py` | Handshake, negociação, fallback de velocidade, `RELE`, `BYE` e cabo arrancado |
+| `tests/test_resiliencia_serial.py` | Silêncio, checksum inválido, `SYNC` falho e `ACK` incompleto sem derrubar o link |
+| `tests/test_database_worker.py` | Fila do `DatabaseWorker`, leituras em lote, consultas e callbacks na GUI |
+| `tests/test_concorrencia.py` | 1 000 leituras com o event loop livre, consultas fora da GUI e encerramento em até 2 s |
+| `tests/test_aplicacao_controller.py` | Fiação dos workers: telemetria nas telas e no banco, corte → `RELE`, disparo e encerramento |
+| `tests/test_dashboard.py` | Proteção no Model e gráfico em tempo real e histórico |
+| `tests/test_limites_dialog.py` | Diálogo de limites em MVC, validação e gravação assíncrona |
+| `tests/test_historico.py` | Histórico em MVC, filtros, callbacks e carga de milhares de eventos |
+| `tests/test_arquitetura.py` | Auditoria de camadas por AST e delegação de I/O das telas reais |
 | `tests/test_modo_falha.py` | Interruptor do modo de teste, atalho `Ctrl+Shift+F` e selo da barra de status |
 | `tests/test_falha_simulada_corte.py` | Modo de falha ligado ao corte: com o modo ativo o banco não muda (conferido por SQL); desligado, o corte grava |
 
@@ -621,6 +922,30 @@ rg -n 'execute(many)?\(\s*f["'']' -g '*.py' .
 rg -n '(SELECT|INSERT|UPDATE|DELETE).*\.format\(' -g '*.py' .
 rg -n '(SELECT|INSERT|UPDATE|DELETE).*%\s*(\(|[A-Za-z_])' -g '*.py' .
 ```
+
+---
+
+## Checklist da Entrega A1/5
+
+| Exigência | Onde é atendida |
+|---|---|
+| Comunicação serial fora da thread da GUI | `SerialWorker(QThread)`, um por conexão, criado pelo `AplicacaoController` |
+| Banco fora da thread da GUI (gravações e consultas) | `DatabaseWorker(QThread)` com fila de tarefas e `executar(..., ao_concluir, ao_falhar)` |
+| Nenhum I/O na GUI: regras, histórico, `config.json`, portas e corte | Todas as telas usam o `DatabaseWorker`; auditado em `tests/test_arquitetura.py` |
+| Encerramento cooperativo das threads | `parar()` + `wait()` no `aboutToQuit`; `finished → deleteLater`; `BYE` para a placa |
+| Protocolo com enquadramento e checksum | `$CORPO*CS` com XOR em `models/protocolo.py`; pacotes inválidos descartados e contados |
+| Handshake sempre a 9600 bps e negociação entre 9600, 19200, 38400 e 115200 | `HS` → `ACK,HS` → troca de velocidade → `SYNC` → `ACK,SYNC`; fallback para a velocidade menor |
+| Watchdog e detecção de queda de link | `PING` a cada 1 s (watchdog de 5 s na placa); cabo removido ou silêncio → **Link perdido** |
+| Firmware do Arduino UNO e placa virtual | `firmware/smartgrid_placa/smartgrid_placa.ino` e `tools/simulador_placa.py` |
+| Fases do handshake e velocidade negociada visíveis ao operador | Tela Comunicação Serial (`SerialConfigView` + `SerialConfigController`) |
+| Taxa de amostragem configurável e persistida | Campo da tela serial → `taxa_amostragem_ms` no `config.json` → `HS` |
+| Histórico de medições no banco | Tabela `leituras` com índice por data/hora, gravada em lote |
+| Gráfico em tempo real e consulta histórica | Dashboard: modo tempo real e filtros "últimas N" ou intervalo de data/hora |
+| Eventos ligados ao dispositivo | `eventos.dispositivo_id`; coluna e filtro de dispositivo no Histórico |
+| Limites de tensão e corrente gravados no JSON | Diálogo de limites → `limites_iniciais` no `config.json` |
+| MVC estrito em todas as telas | `views/` + `controllers/` por tela ([tabela MVC](#padrão-mvc-por-camada)) |
+| Testes de concorrência, resiliência e camadas | `tests/test_concorrencia.py`, `tests/test_resiliencia_serial.py`, `tests/test_arquitetura.py` |
+| Bancada e roteiro do seminário | [`docs/bancada.md`](docs/bancada.md) e [`docs/roteiro-demonstracao.md`](docs/roteiro-demonstracao.md) |
 
 ---
 
@@ -655,6 +980,11 @@ rg -n '(SELECT|INSERT|UPDATE|DELETE).*%\s*(\(|[A-Za-z_])' -g '*.py' .
 
 ---
 
+## Forma de Entrega e Apresentação (A1/5)
+
+- **Envio do Projeto:** repositório atualizado na data de entrega, com o firmware e a documentação da bancada.
+- **Seminário:** apresentação de 15 a 20 minutos pelos 4 integrantes, com exposição da arquitetura (MVC, três threads e protocolo) e demonstração ao vivo com o Arduino UNO: handshake, telemetria em tempo real, consulta histórica, corte de carga, falha induzida (USB removido) e recriação do `config.json`, seguida de arguição. Ver [`docs/roteiro-demonstracao.md`](docs/roteiro-demonstracao.md).
+
 ## Forma de Entrega e Apresentação (A1/2)
 
 - **Envio do Projeto:** repositório atualizado com o projeto na data de entrega.
@@ -677,6 +1007,17 @@ rg -n '(SELECT|INSERT|UPDATE|DELETE).*%\s*(\(|[A-Za-z_])' -g '*.py' .
 - **Continuidade (A1/2):** o desenvolvimento da A1/2 continua no mesmo repositório da A1/1.
 
 ---
+
+## Critérios Avaliativos (A1/5)
+
+| # | Categoria | Como o projeto atende | Nota Máx. |
+|---|---|---|---|
+| **1** | **Concorrência e threads** | • Serial e SQLite fora da thread da GUI (`SerialWorker` e `DatabaseWorker`)<br>• Comunicação entre threads só por sinais e callbacks entregues na GUI<br>• Encerramento cooperativo (`parar()` + `wait()`, `deleteLater`) e testes de concorrência | **—** |
+| **2** | **Protocolo serial e handshake** | • Pacotes `$CORPO*CS` com checksum XOR e descarte de pacotes inválidos<br>• Handshake sempre a 9600 bps, negociação entre 9600, 19200, 38400 e 115200 com fallback<br>• Watchdog, `PING`, `BYE` e detecção de queda de link; firmware do Arduino UNO | **2,5 pts** |
+| **3** | **Persistência e histórico de medições** | • Tabela `leituras` gravada em lote pelo `DatabaseWorker`<br>• Gráfico em tempo real e consulta histórica por últimas N leituras ou intervalo<br>• Eventos de corte e disparo ligados ao dispositivo | **—** |
+| **4** | **MVC estrito e documentação** | • View e Controller separados em todas as telas, sem regra na View e sem widget no Model<br>• Auditoria automática de camadas (`tests/test_arquitetura.py`)<br>• README com threads, protocolo, MVC e passo a passo de execução | **—** |
+| **5** | **Bancada e seminário** | • Arduino UNO montado e gravado, com falha induzida (USB removido) e reconexão<br>• Roteiro de 15 a 20 minutos com os 4 integrantes e arguição | **1,5 pt** |
+| | **NOTA TOTAL** | | **10,0 pts** |
 
 ## Critérios Avaliativos (A1/2)
 
