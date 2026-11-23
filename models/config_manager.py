@@ -18,8 +18,8 @@ Campo                    Padrão       Regra
 ``timeout_ms``           ``1000``     inteiro de 100 a 10 000 (milissegundos)
 ``limites_iniciais``     ver abaixo   ``corrente``, ``tensao`` e ``potencia``,
                                       números maiores que zero
-``taxa_amostragem_ms``   ``1000``     inteiro de 100 a 5000: período da
-                                      telemetria pedido à placa no handshake
+``taxa_amostragem_ms``   ``1000``     inteiro de 100 a 5000: janela de
+                                      agregação no desktop; Timer1 fixo em 200 Hz
 ``simular_falha_corte``  ``false``    verdadeiro ou falso
 =======================  ===========  =========================================
 
@@ -111,7 +111,7 @@ def _limites_validos(valor) -> bool:
     )
 
 
-#: Período padrão da telemetria pedido à placa no handshake.
+#: Período padrão da agregação no desktop; Timer1 fixo em 200 Hz.
 TAXA_AMOSTRAGEM_PADRAO_MS = 1000
 
 

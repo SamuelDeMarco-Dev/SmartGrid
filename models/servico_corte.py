@@ -1,22 +1,11 @@
-"""Corte de emergência (e religamento) como operação atômica.
+"""Transações manuais e auditoria da proteção física.
 
-Dentro de UMA transação SQLite:
-
-    1. ``UPDATE`` do status do disjuntor (DISJ-01) e do relé (RELE-01);
-    2. ponto de injeção de falha (modo de teste da issue #31);
-    3. ``INSERT`` do evento de comando no histórico.
-
-Se qualquer passo falhar, ``Database.transacao()`` faz ROLLBACK: os
-dispositivos voltam ao estado anterior e nenhum evento é gravado. Só depois do
-COMMIT o serviço avisa o restante da aplicação pelo barramento — a UI nunca
-mostra um estado que não está no banco.
-
-Uso (no ``main.py``):
-
-    servico = ServicoCorteEmergencial(repo_dispositivos, repo_eventos)
-    servico.executar(EstadoDisjuntor.ABERTO, leitura.resumo())
-
-Modo de falha simulada (#31): ``servico.simular_falha = True``.
+Operação manual: UPDATE dos dois dispositivos, ponto de falha simulada e
+INSERT do comando na mesma transação. Erro antes do commit faz rollback e
+impede envio. Commit registra solicitação, não comprova posição do relé.
+AplicacaoController aguarda DAT para mostrar o estado na conexão real.
+O botão físico solicita !0 antes da persistência; seus métodos de auditoria
+e sincronização não passam pelo gancho de falha das operações manuais.
 """
 
 import logging
@@ -55,8 +44,9 @@ class ServicoCorteEmergencial:
         linha = self._repo_dispositivos.obter_por_tag(self.TAG_DISJUNTOR)
         return EstadoDisjuntor[linha["status"]]
 
-    def executar(self, destino: EstadoDisjuntor, valor_medido: str = "") -> Evento:
-        """Leva disjuntor e relé ao estado ``destino`` de forma atômica.
+    def executar(self, destino: EstadoDisjuntor, valor_medido: str = "", *,
+                 publicar_estado: bool = True, validar=None) -> Evento:
+        """Registra o estado solicitado e o comando de forma atômica no banco.
 
         Levanta ``FalhaCorteEmergencial`` se a transação for desfeita.
         """
@@ -65,20 +55,47 @@ class ServicoCorteEmergencial:
 
         try:
             with Database.transacao() as conn:
+                if validar is not None:
+                    validar()
                 self._repo_dispositivos.atualizar_status(self.TAG_DISJUNTOR, status, conn)
                 self._repo_dispositivos.atualizar_status(self.TAG_RELE, status, conn)
                 self._ponto_de_falha()
                 self._repo_eventos.adicionar(evento, conn, self.TAG_DISJUNTOR)
+                if validar is not None:
+                    validar()
         except Exception as erro:
             logger.error(
                 "Falha na operação de corte emergencial. Rollback executado: %s.", erro
             )
             raise FalhaCorteEmergencial(str(erro)) from erro
 
-        logger.info("%s — disjuntor e relé em %s.", evento.descricao, status)
+        logger.info("%s — estado solicitado %s persistido; confirmação física depende de DAT.",
+                    evento.descricao, status)
         barramento.evento_persistido.emit(evento)
-        barramento.estado_disjuntor_alterado.emit(destino)
+        if publicar_estado:
+            barramento.estado_disjuntor_alterado.emit(destino)
         return evento
+
+    def registrar_botao_protecao(self, valor_medido: str = "") -> Evento:
+        """Audita a solicitação; não presume que o relé já abriu.
+
+        Executado depois de !0, sem o gancho de falha das operações manuais.
+        Falhas reais do SQLite são propagadas para o aviso na GUI.
+        """
+        evento = Evento.agora(
+            TipoEvento.ALERTA,
+            "Botão físico pressionado — solicitado !0; aguardando confirmação DAT",
+            valor_medido,
+        )
+        self._repo_eventos.adicionar(evento, dispositivo_tag=self.TAG_DISJUNTOR)
+        barramento.evento_persistido.emit(evento)
+        return evento
+
+    def sincronizar_estado(self, estado: EstadoDisjuntor) -> None:
+        """Reflete somente um estado recebido em DAT, sem enviar comandos."""
+        with Database.transacao() as conn:
+            for tag in (self.TAG_DISJUNTOR, self.TAG_RELE):
+                self._repo_dispositivos.atualizar_status(tag, estado.name, conn)
 
     def registrar_disparo_espontaneo(self, valor_medido: str = "") -> Evento:
         """Grava a abertura do disjuntor pelo hardware e o alerta correspondente.
@@ -90,13 +107,16 @@ class ServicoCorteEmergencial:
         """
         evento = Evento.agora(
             TipoEvento.ALERTA,
-            "Disjuntor abriu espontaneamente — proteção atuada no hardware",
+            "Disjuntor abriu espontaneamente — estado aberto confirmado em DAT",
             valor_medido,
         )
 
         with Database.transacao() as conn:
             self._repo_dispositivos.atualizar_status(
                 self.TAG_DISJUNTOR, EstadoDisjuntor.ABERTO.name, conn
+            )
+            self._repo_dispositivos.atualizar_status(
+                self.TAG_RELE, EstadoDisjuntor.ABERTO.name, conn
             )
             self._repo_eventos.adicionar(evento, conn, self.TAG_DISJUNTOR)
 

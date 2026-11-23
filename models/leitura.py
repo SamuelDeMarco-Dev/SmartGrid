@@ -18,12 +18,15 @@ class Leitura:
     instante: datetime
     tensao: float
     corrente: float
+    # Máximos reais da janela (V, A, W), usados somente nos alertas. As telas
+    # e o SQLite continuam apresentando as médias e P = média(V) × média(I).
+    picos: tuple[float, float, float] | None = None
 
     def __post_init__(self) -> None:
         if self.tensao < 0:
-            raise ValueError("A tensão eficaz não pode ser negativa.")
+            raise ValueError("A tensão não pode ser negativa.")
         if self.corrente < 0:
-            raise ValueError("A corrente eficaz não pode ser negativa.")
+            raise ValueError("A corrente não pode ser negativa.")
 
     @classmethod
     def zerada(cls) -> "Leitura":

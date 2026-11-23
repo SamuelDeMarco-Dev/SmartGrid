@@ -77,7 +77,7 @@ class DashboardController(QObject):
         self._conectar_view()
         self._conectar_modelo()
 
-        self.view.mostrar_disjuntor(self.estado_disjuntor)
+        self.view.mostrar_sem_confirmacao(self.estado_disjuntor)
         self.view.mostrar_leitura(0.0, 0.0, 0.0)
         self._atualizar_aquisicao("")
         self._atualizar_resumo_regras()
@@ -110,6 +110,16 @@ class DashboardController(QObject):
         self._banco.leituras_consultadas.connect(self._ao_leituras_consultadas)
         self._banco.consulta_falhou.connect(self._ao_consulta_falhou)
         self._aplicacao.disparo_espontaneo.connect(self._ao_disparo_espontaneo)
+        self._aplicacao.rele_confirmado.connect(self._mostrar_estado_confirmado)
+        self._aplicacao.botao_alterado.connect(self._ao_botao_alterado)
+        self._aplicacao.falha_persistencia.connect(self._avisar_falha_persistencia)
+        self._aplicacao.aviso_comunicacao.connect(self._avisar_comunicacao)
+
+    def _ao_botao_alterado(self, _pressionado: bool) -> None:
+        self._atualizar_comandos()
+
+    def _avisar_comunicacao(self, mensagem: str) -> None:
+        self.view.avisar("Comunicação serial", mensagem)
 
     # ------------------------------------------------------------------
     # Telemetria e proteção
@@ -137,7 +147,8 @@ class DashboardController(QObject):
         barramento.registrar_evento(
             TipoEvento.ALERTA,
             f"Limite de alerta ultrapassado: {avaliacao.violacoes[0].descricao}",
-            leitura.resumo(),
+            leitura.resumo() + " | " + "; ".join(
+                f"máximo {v.valor:.2f} {v.grandeza.unidade}" for v in avaliacao.violacoes),
         )
 
     def _ao_status_conexao(self, conectado: bool, descricao: str) -> None:
@@ -147,6 +158,7 @@ class DashboardController(QObject):
             # Ao reconectar, um consumo ainda acima do limite alerta de novo.
             self._avaliador.reiniciar()
             self.view.mostrar_situacao(cores.COR_INATIVA, NivelProtecao.INATIVO.value)
+            self.view.mostrar_sem_confirmacao(self.estado_disjuntor)
 
     def _atualizar_aquisicao(self, descricao: str) -> None:
         if self._conectado:
@@ -163,10 +175,12 @@ class DashboardController(QObject):
     def _atualizar_comandos(self) -> None:
         """Comandos só fazem sentido com o microcontrolador do outro lado."""
         livre = self._conectado and not self._corte_em_andamento
+        bloqueado = self._aplicacao.botao_pressionado and not self.estado_disjuntor.energizado
         self.view.habilitar_comandos(
-            corte=livre,
+            corte=livre and not bloqueado,
             disparo=livre and self.estado_disjuntor.energizado,
-            dica="" if self._conectado else "Conecte a porta serial para atuar na carga.",
+            dica=("Libere o botão de proteção para solicitar o religamento." if bloqueado else
+                  "" if self._conectado else "Conecte a porta serial para atuar na carga."),
         )
 
     # ------------------------------------------------------------------
@@ -240,6 +254,13 @@ class DashboardController(QObject):
     # ------------------------------------------------------------------
     def alternar_carga(self) -> None:
         """Corte de emergência (ou religamento), sempre sob confirmação."""
+        if self._corte_em_andamento:
+            return
+        if not self.estado_disjuntor.energizado and self._aplicacao.botao_pressionado:
+            self.view.avisar("Proteção", "Libere o botão de proteção antes de solicitar o religamento.")
+            return
+        destino = self.estado_disjuntor.alternado()
+        contexto = self._aplicacao.contexto_operacao
         if self.estado_disjuntor.energizado:
             titulo = "Corte de emergência"
             pergunta = (
@@ -252,14 +273,18 @@ class DashboardController(QObject):
 
         if not self.view.confirmar(titulo, pergunta):
             return
+        if contexto != self._aplicacao.contexto_operacao:
+            self.view.avisar("Operação cancelada",
+                             "A proteção ou a conexão mudou durante a confirmação.\n"
+                             "Confira a carga e solicite a operação novamente.")
+            return
 
-        # A transação roda no DatabaseWorker; após o COMMIT o serviço emite
-        # `estado_disjuntor_alterado`, que atualiza o badge e envia o RELE à placa.
+        # O COMMIT autoriza enviar !0/!1. O badge e a conclusão da operação
+        # aguardam DAT na conexão real; rollback manual continua no serviço.
         self._corte_em_andamento = True
         self._atualizar_comandos()
-        self._banco.executar(
-            self._servico_corte.executar,
-            self.estado_disjuntor.alternado(),
+        self._aplicacao.executar_comando_manual(
+            destino,
             self.leitura_atual.resumo(),
             ao_concluir=lambda _evento: self._finalizar_corte(),
             ao_falhar=lambda erro: self._falhar_corte(titulo, erro),
@@ -283,11 +308,26 @@ class DashboardController(QObject):
         self.view.avisar_erro(titulo, mensagem)
 
     def _ao_estado_alterado(self, estado: EstadoDisjuntor) -> None:
+        # O sinal do serviço confirma a transação, não a posição do relé.
+        if self._aplicacao.serial_ativa:
+            return
+        self._mostrar_estado_confirmado(estado)
+
+    def _mostrar_estado_confirmado(self, estado: EstadoDisjuntor) -> None:
         if estado is self.estado_disjuntor:
+            self.view.mostrar_disjuntor(estado)
+            self._atualizar_comandos()
             return
         self.estado_disjuntor = estado
         self.view.mostrar_disjuntor(estado)
         self._atualizar_comandos()
+
+    def _avisar_falha_persistencia(self, erro: str) -> None:
+        self.view.avisar_erro(
+            "Falha de registro",
+            "Não foi possível persistir uma ocorrência ou medição no SQLite.\n"
+            "O estado da carga depende da confirmação DAT da placa.\n\n" + erro,
+        )
 
     def _ao_disparo_espontaneo(self, erro_gravacao: str) -> None:
         # O disjuntor já abriu fisicamente: a tela mostra ABERTO mesmo que a
@@ -300,5 +340,7 @@ class DashboardController(QObject):
             )
         self.view.avisar(
             "Proteção atuada",
-            "O disjuntor abriu espontaneamente.\n\nVerifique a instalação antes de religar a carga.",
+            ("A telemetria confirmou o desligamento da carga.\n\n"
+             if self._aplicacao.serial_ativa else "Simulação de desligamento, sem confirmação de hardware.\n\n") +
+            "Verifique a instalação e libere o botão antes de solicitar o religamento manual.",
         )

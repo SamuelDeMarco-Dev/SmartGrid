@@ -63,6 +63,9 @@ class DatabaseWorker(QThread):
 
     #: Total de leituras gravadas, emitido a cada lote (útil para a interface).
     leituras_gravadas = pyqtSignal(int)
+    falha_persistencia = pyqtSignal(str)
+    MAX_LEITURAS_NA_FILA = 10000
+    TAMANHO_LOTE = 512
 
     # Internos: levam o resultado de ``executar`` de volta à thread da GUI.
     _tarefa_concluida = pyqtSignal(int, object)
@@ -82,6 +85,11 @@ class DatabaseWorker(QThread):
         self._callbacks: dict[int, tuple[Callable | None, Callable | None]] = {}
         self._trava = threading.Lock()
         self._total_leituras = 0
+        self._leituras_na_fila = 0
+        self.leituras_descartadas = 0
+        self._aceitando = True
+        self._avisou_fila = False
+        self._avisou_falha_leituras = False
 
         # O QThread pertence à thread que o criou (a GUI); por isso estes
         # slots rodam lá, mesmo com o sinal emitido de dentro de run().
@@ -92,13 +100,30 @@ class DatabaseWorker(QThread):
     # API usada pela thread da GUI (thread-safe, nunca bloqueia)
     # ------------------------------------------------------------------
     def gravar_leitura(self, leitura: Leitura) -> None:
-        self._fila.put(leitura)
+        avisar = False
+        with self._trava:
+            if not self._aceitando:
+                return
+            if self._leituras_na_fila >= self.MAX_LEITURAS_NA_FILA:
+                self.leituras_descartadas += 1
+                if not self._avisou_fila:
+                    self._avisou_fila = True
+                    avisar = True
+            else:
+                self._leituras_na_fila += 1
+                self._fila.put(leitura)
+        if avisar:
+            self.falha_persistencia.emit("SQLite atrasado: fila de leituras cheia; amostra descartada.")
 
     def gravar_evento(self, evento: Evento, dispositivo_tag: str | None = None) -> None:
-        self._fila.put(_Tarefa(self._gravar_evento, (evento, dispositivo_tag)))
+        with self._trava:
+            if self._aceitando:
+                self._fila.put(_Tarefa(self._gravar_evento, (evento, dispositivo_tag)))
 
     def consultar_leituras(self, filtro: FiltroLeituras) -> None:
-        self._fila.put(_Tarefa(self._consultar_leituras, (filtro,)))
+        with self._trava:
+            if self._aceitando:
+                self._fila.put(_Tarefa(self._consultar_leituras, (filtro,)))
 
     def executar(
         self,
@@ -121,7 +146,11 @@ class DatabaseWorker(QThread):
         id_tarefa = next(self._ids)
         with self._trava:
             self._callbacks[id_tarefa] = (ao_concluir, ao_falhar)
-        self._fila.put(_Tarefa(funcao, args, kwargs, id_tarefa))
+            aceitando = self._aceitando
+            if aceitando:
+                self._fila.put(_Tarefa(funcao, args, kwargs, id_tarefa))
+        if not aceitando:
+            self._tarefa_falhou.emit(id_tarefa, RuntimeError("Worker de banco encerrado."))
         return id_tarefa
 
     def descartar_callbacks(self, id_tarefa: int) -> None:
@@ -134,8 +163,11 @@ class DatabaseWorker(QThread):
 
     def parar(self) -> None:
         """Pede o encerramento depois de esvaziar o que já está na fila."""
-        self.requestInterruption()
-        self._fila.put(_PARAR)
+        with self._trava:
+            if self._aceitando:
+                self._aceitando = False
+                self.requestInterruption()
+                self._fila.put(_PARAR)
 
     # ------------------------------------------------------------------
     # Corpo da thread
@@ -147,7 +179,7 @@ class DatabaseWorker(QThread):
             item = self._fila.get()
             # Junta tudo o que já estiver esperando: leituras viram um lote só.
             itens = [item]
-            while True:
+            while len(itens) < self.TAMANHO_LOTE:
                 try:
                     itens.append(self._fila.get_nowait())
                 except queue.Empty:
@@ -159,6 +191,9 @@ class DatabaseWorker(QThread):
                     parar = True
                     break
                 if isinstance(item, Leitura):
+                    with self._trava:
+                        self._leituras_na_fila -= 1
+                        self._avisou_fila = False
                     pendentes.append(item)
                     continue
                 # Mantém a ordem: leituras pedidas antes de uma tarefa vão antes.
@@ -179,7 +214,12 @@ class DatabaseWorker(QThread):
             self._total_leituras += self._repo_leituras.adicionar_lote(leituras)
         except sqlite3.Error as erro:
             logger.error("Falha ao gravar %d leituras: %s", len(leituras), erro)
+            self.leituras_descartadas += len(leituras)
+            if not self._avisou_falha_leituras:
+                self._avisou_falha_leituras = True
+                self.falha_persistencia.emit(f"Falha ao gravar medições no SQLite: {erro}")
             return
+        self._avisou_falha_leituras = False
         self.leituras_gravadas.emit(self._total_leituras)
 
     def _rodar(self, tarefa: _Tarefa) -> None:
@@ -203,6 +243,7 @@ class DatabaseWorker(QThread):
             self._repo_eventos.adicionar(evento, dispositivo_tag=dispositivo_tag)
         except sqlite3.Error as erro:
             logger.error("Falha ao gravar evento '%s' no banco: %s", evento.descricao, erro)
+            self.falha_persistencia.emit(f"Falha ao gravar evento no SQLite: {erro}")
             return
         barramento.evento_persistido.emit(evento)
 

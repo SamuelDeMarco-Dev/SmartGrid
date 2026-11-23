@@ -1,107 +1,60 @@
-"""Protocolo serial entre o desktop e a placa de medição (Arduino UNO).
+"""Protocolo obrigatório: comandos ! e DAT com XOR.
 
-Enquadramento
--------------
-Cada pacote é uma linha ASCII::
-
-    $CORPO*CS\\n
-
-``CORPO`` são campos separados por vírgula (o primeiro é o comando) e ``CS`` é
-o XOR de todos os bytes do corpo em dois dígitos hexadecimais maiúsculos —
-o mesmo esquema das sentenças NMEA. Linha sem ``$``, sem ``*``, com checksum
-errado ou com campos fora do esperado é descartada com :class:`ErroProtocolo`.
-
-Máquina de estados da placa
----------------------------
-1. ``AGUARDANDO_LINK`` a **9600 bps**: a placa não transmite nada.
-2. Desktop → ``HS,<baud>,<intervalo_ms>`` (handshake de configuração).
-   Placa → ``ACK,HS,<baud>,<intervalo_ms>`` ou ``NAK,<motivo>``.
-3. Os dois lados trocam para ``<baud>``. Desktop → ``SYNC``; placa →
-   ``ACK,SYNC``. Se o ``SYNC`` não chegar em :data:`TEMPO_SYNC_S`, a placa
-   volta a 9600 bps e ao passo 1.
-4. Placa → ``TLM,<seq>,<tensao>,<corrente>,<disjuntor>`` a cada
-   ``<intervalo_ms>`` (``disjuntor``: 1 fechado, 0 aberto).
-5. Desktop → ``PING`` periodicamente; sem nenhuma mensagem do host por
-   :data:`WATCHDOG_PLACA_S`, a placa volta ao passo 1. ``RELE,0|1`` abre ou
-   fecha a carga (resposta ``ACK,RELE,0|1``) e ``BYE`` encerra o link.
-
-O firmware em ``firmware/smartgrid_placa`` e a placa virtual em
-``tools/simulador_placa.py`` implementam o lado da placa; o
-``models/serial_worker.py``, o lado do desktop.
-
-Este módulo é Python puro: não conhece Qt nem pyserial.
+!S<baud> responde ACK na velocidade anterior e inicia DAT na nova. !P pausa
+em 9600 preservando o relé. Não há SYNC, PING ou watchdog no firmware.
+O intervalo do desktop controla a agregação; Timer1 continua em 200 Hz.
 """
-
 from __future__ import annotations
 
-import math
+import re
 from dataclasses import dataclass
 from enum import Enum
 
-#: Velocidades aceitas pela placa, da mais lenta para a mais rápida.
 VELOCIDADES = (9600, 19200, 38400, 115200)
-
-#: Toda conexão começa aqui; é a única velocidade que a placa escuta ao ligar.
-VELOCIDADE_INICIAL = VELOCIDADES[0]
-
-#: Faixa do período de telemetria pedido no handshake, em milissegundos.
+VELOCIDADE_INICIAL = 9600
 INTERVALO_MINIMO_MS = 100
 INTERVALO_MAXIMO_MS = 5000
-
-#: Quanto a placa espera o ``SYNC`` na nova velocidade antes de desistir.
-TEMPO_SYNC_S = 2.0
-
-#: Silêncio do host que faz a placa voltar a ``AGUARDANDO_LINK``.
-WATCHDOG_PLACA_S = 5.0
-
-#: Período do ``PING`` enviado pelo desktop (bem abaixo do watchdog).
-PERIODO_PING_S = 1.0
-
-INICIO = "$"
-SEPARADOR_CS = "*"
-TAMANHO_MAXIMO = 64
+PERIODO_AQUISICAO_S = 0.005
+TAMANHO_MAXIMO = 128
 
 
 class Comando(str, Enum):
-    """Primeiro campo de cada pacote."""
-
-    HS = "HS"
-    ACK = "ACK"
-    NAK = "NAK"
-    SYNC = "SYNC"
-    TLM = "TLM"
-    PING = "PING"
+    INICIAR = "S"
+    PAUSAR = "P"
     RELE = "RELE"
-    BYE = "BYE"
+    DAT = "DAT"
+    ACK = "ACK"
+    ERR = "ERR"
 
 
 class ErroProtocolo(ValueError):
-    """Pacote malformado, corrompido ou incoerente com o protocolo."""
+    """Linha malformada, corrompida ou incoerente com o firmware."""
 
 
 @dataclass(frozen=True, slots=True)
 class Mensagem:
-    """Pacote já validado: comando e demais campos, como texto."""
-
     comando: Comando
     campos: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class Telemetria:
-    """Conteúdo de um pacote ``TLM``."""
-
-    seq: int
-    tensao: float
-    corrente: float
+    a0: int
+    a1: int
     disjuntor_fechado: bool
+    botao_pressionado: bool
+
+    @property
+    def tensao(self) -> float:
+        return self.a0 * 250.0 / 1023.0
+
+    @property
+    def corrente(self) -> float:
+        # A1 continua indicando o potenciômetro mesmo com o relé aberto.
+        return self.a1 * 20.0 / 1023.0 if self.disjuntor_fechado else 0.0
 
 
-# ----------------------------------------------------------------------
-# Enquadramento
-# ----------------------------------------------------------------------
 def checksum(corpo: str) -> str:
-    """XOR dos bytes do corpo, em dois dígitos hexadecimais."""
     valor = 0
     for byte in corpo.encode("ascii"):
         valor ^= byte
@@ -109,164 +62,98 @@ def checksum(corpo: str) -> str:
 
 
 def montar(comando: Comando, *campos: object) -> bytes:
-    """Monta o pacote pronto para ``write``: ``b"$HS,115200,1000*4B\\n"``."""
+    """Monta DAT (também usado nos testes de pacotes inválidos)."""
     corpo = ",".join([comando.value, *(str(campo) for campo in campos)])
-    return f"{INICIO}{corpo}{SEPARADOR_CS}{checksum(corpo)}\n".encode("ascii")
+    return f"${corpo}*{checksum(corpo)}\n".encode("ascii")
 
 
 def interpretar(linha: bytes | str) -> Mensagem:
-    """Valida o enquadramento e o checksum e devolve a :class:`Mensagem`."""
     if isinstance(linha, bytes):
         try:
             linha = linha.decode("ascii")
         except UnicodeDecodeError:
-            raise ErroProtocolo("Pacote com bytes fora do ASCII.") from None
-
-    linha = linha.strip()
+            raise ErroProtocolo("Linha com bytes fora do ASCII.") from None
+    linha = linha.rstrip("\r\n")
     if len(linha) > TAMANHO_MAXIMO:
-        raise ErroProtocolo("Pacote maior que o tamanho máximo.")
-    if not linha.startswith(INICIO) or SEPARADOR_CS not in linha:
-        raise ErroProtocolo(f"Pacote sem enquadramento: {linha!r}.")
+        raise ErroProtocolo("Linha maior que o tamanho máximo.")
+    if linha.startswith("$"):
+        corpo, separador, recebido = linha[1:].rpartition("*")
+        if not separador or not re.fullmatch(r"[0-9a-fA-F]{2}", recebido):
+            raise ErroProtocolo("Pacote sem enquadramento/checksum hexadecimal.")
+        if recebido.upper() != checksum(corpo):
+            raise ErroProtocolo("Checksum inválido.")
+        nome, *campos = corpo.split(",")
+        if nome != "DAT":
+            raise ErroProtocolo(f"Pacote desconhecido: {nome!r}.")
+        mensagem = Mensagem(Comando.DAT, tuple(campos))
+        decodificar_telemetria(mensagem)
+        return mensagem
+    inicio = re.fullmatch(r">>> ACK: INICIANDO EM (9600|19200|38400|115200) BPS <<<", linha)
+    if inicio:
+        return Mensagem(Comando.ACK, ("S", inicio[1]))
+    if linha == ">>> ACK: CONVERSAO PAUSADA. RETORNANDO A 9600 BPS <<<":
+        return Mensagem(Comando.ACK, ("P",))
+    if linha in (">>> ACK: RELE LIGADO <<<", ">>> ACK: RELE DESLIGADO <<<"):
+        return Mensagem(Comando.ACK, ("RELE", "1" if " LIGADO " in linha else "0"))
+    if linha.startswith(">>> ERR: ") and linha.endswith(" <<<"):
+        return Mensagem(Comando.ERR, (linha[9:-4],))
+    # Comandos do host, para o simulador e auditoria dos testes.
+    if linha == "!P":
+        return Mensagem(Comando.PAUSAR)
+    if linha in ("!0", "!1"):
+        return Mensagem(Comando.RELE, (linha[1],))
+    if re.fullmatch(r"!S\d+", linha):
+        baud = int(linha[2:])
+        validar_velocidade(baud)
+        return Mensagem(Comando.INICIAR, (str(baud),))
+    raise ErroProtocolo(f"Linha desconhecida: {linha!r}.")
 
-    corpo, _, recebido = linha[1:].rpartition(SEPARADOR_CS)
-    if recebido.upper() != checksum(corpo):
-        raise ErroProtocolo(f"Checksum inválido em {linha!r}.")
 
-    nome, *campos = corpo.split(",")
-    try:
-        comando = Comando(nome)
-    except ValueError:
-        raise ErroProtocolo(f"Comando desconhecido: {nome!r}.") from None
-    return Mensagem(comando, tuple(campos))
-
-
-# ----------------------------------------------------------------------
-# Pacotes do desktop
-# ----------------------------------------------------------------------
-def handshake(baud: int, intervalo_ms: int) -> bytes:
-    """``HS``: pede a nova velocidade e o período da telemetria."""
+def iniciar(baud: int) -> bytes:
     validar_velocidade(baud)
-    validar_intervalo(intervalo_ms)
-    return montar(Comando.HS, baud, intervalo_ms)
+    return f"!S{baud}\n".encode("ascii")
 
 
-def sync() -> bytes:
-    return montar(Comando.SYNC)
-
-
-def ping() -> bytes:
-    return montar(Comando.PING)
-
-
-def bye() -> bytes:
-    return montar(Comando.BYE)
+def pausar() -> bytes:
+    return b"!P\n"
 
 
 def rele(fechado: bool) -> bytes:
-    """``RELE,1`` fecha a carga (religamento); ``RELE,0`` abre (corte)."""
-    return montar(Comando.RELE, int(fechado))
+    return b"!1\n" if fechado else b"!0\n"
 
 
-# ----------------------------------------------------------------------
-# Pacotes da placa (usados pela placa virtual e pelos testes)
-# ----------------------------------------------------------------------
-def ack(*campos: object) -> bytes:
-    return montar(Comando.ACK, *campos)
-
-
-def nak(motivo: str) -> bytes:
-    return montar(Comando.NAK, motivo)
-
-
-def telemetria(
-    seq: int, tensao: float, corrente: float, disjuntor_fechado: bool
-) -> bytes:
-    return montar(
-        Comando.TLM, seq, f"{tensao:.1f}", f"{corrente:.3f}", int(disjuntor_fechado)
-    )
-
-
-# ----------------------------------------------------------------------
-# Decodificação e validação
-# ----------------------------------------------------------------------
-def decodificar_handshake(mensagem: Mensagem) -> tuple[int, int]:
-    """``(baud, intervalo_ms)`` de um ``HS`` ou de um ``ACK,HS``."""
-    campos = mensagem.campos
-    if mensagem.comando is Comando.ACK:
-        if not campos or campos[0] != Comando.HS.value:
-            raise ErroProtocolo("ACK não corresponde ao handshake.")
-        campos = campos[1:]
-    elif mensagem.comando is not Comando.HS:
-        raise ErroProtocolo(f"Esperado HS, recebido {mensagem.comando.value}.")
-
-    if len(campos) != 2:
-        raise ErroProtocolo("Handshake deve ter velocidade e intervalo.")
-    baud, intervalo = (_inteiro(campo) for campo in campos)
-    validar_velocidade(baud)
-    validar_intervalo(intervalo)
-    return baud, intervalo
+def telemetria(a0: int, a1: int, disjuntor_fechado: bool, botao: bool = False) -> bytes:
+    return montar(Comando.DAT, a0, a1, int(disjuntor_fechado), int(botao))
 
 
 def decodificar_telemetria(mensagem: Mensagem) -> Telemetria:
-    """Converte um ``TLM`` em :class:`Telemetria`, conferindo cada campo."""
-    if mensagem.comando is not Comando.TLM:
-        raise ErroProtocolo(f"Esperado TLM, recebido {mensagem.comando.value}.")
-    if len(mensagem.campos) != 4:
-        raise ErroProtocolo("Telemetria deve ter 4 campos.")
-
-    seq_txt, tensao_txt, corrente_txt, disjuntor_txt = mensagem.campos
-    tensao = _real(tensao_txt)
-    corrente = _real(corrente_txt)
-    if tensao < 0 or corrente < 0:
-        raise ErroProtocolo("Tensão e corrente não podem ser negativas.")
-    if disjuntor_txt not in ("0", "1"):
-        raise ErroProtocolo(f"Estado de disjuntor inválido: {disjuntor_txt!r}.")
-    return Telemetria(_inteiro(seq_txt), tensao, corrente, disjuntor_txt == "1")
+    if mensagem.comando is not Comando.DAT or len(mensagem.campos) != 4:
+        raise ErroProtocolo("DAT deve ter A0, A1, RELE e BOTAO.")
+    a0, a1, rele_txt, botao = mensagem.campos
+    if not a0.isascii() or not a1.isascii() or not a0.isdecimal() or not a1.isdecimal():
+        raise ErroProtocolo("ADC deve ser inteiro decimal entre 0 e 1023.")
+    if not (0 <= int(a0) <= 1023 and 0 <= int(a1) <= 1023):
+        raise ErroProtocolo("ADC fora da faixa 0–1023.")
+    if rele_txt not in ("0", "1") or botao not in ("0", "1"):
+        raise ErroProtocolo("RELE e BOTAO devem ser 0 ou 1.")
+    return Telemetria(int(a0), int(a1), rele_txt == "1", botao == "1")
 
 
 def e_ack(mensagem: Mensagem, *esperado: str) -> bool:
-    """True se a mensagem for ``ACK`` começando pelos campos ``esperado``."""
-    return (
-        mensagem.comando is Comando.ACK
-        and mensagem.campos[: len(esperado)] == esperado
-    )
+    return mensagem.comando is Comando.ACK and mensagem.campos[:len(esperado)] == esperado
 
 
 def validar_velocidade(baud: int) -> None:
-    if baud not in VELOCIDADES:
+    if isinstance(baud, bool) or not isinstance(baud, int) or baud not in VELOCIDADES:
         raise ErroProtocolo(f"Velocidade não suportada: {baud} bps.")
 
 
 def validar_intervalo(intervalo_ms: int) -> None:
-    if not INTERVALO_MINIMO_MS <= intervalo_ms <= INTERVALO_MAXIMO_MS:
-        raise ErroProtocolo(
-            f"Intervalo fora da faixa ({INTERVALO_MINIMO_MS}–"
-            f"{INTERVALO_MAXIMO_MS} ms): {intervalo_ms}."
-        )
+    if (isinstance(intervalo_ms, bool) or not isinstance(intervalo_ms, int)
+            or not INTERVALO_MINIMO_MS <= intervalo_ms <= INTERVALO_MAXIMO_MS):
+        raise ErroProtocolo(f"Intervalo de agregação fora de 100–5000 ms: {intervalo_ms}.")
 
 
 def velocidades_para_tentar(alvo: int) -> list[int]:
-    """Da velocidade alvo até 9600, na ordem em que a negociação tenta.
-
-    >>> velocidades_para_tentar(38400)
-    [38400, 19200, 9600]
-    """
     validar_velocidade(alvo)
     return [baud for baud in reversed(VELOCIDADES) if baud <= alvo]
-
-
-def _inteiro(texto: str) -> int:
-    try:
-        return int(texto)
-    except ValueError:
-        raise ErroProtocolo(f"Campo numérico inválido: {texto!r}.") from None
-
-
-def _real(texto: str) -> float:
-    try:
-        valor = float(texto)
-    except ValueError:
-        raise ErroProtocolo(f"Campo numérico inválido: {texto!r}.") from None
-    if not math.isfinite(valor):
-        raise ErroProtocolo(f"Valor não finito: {texto!r}.")
-    return valor

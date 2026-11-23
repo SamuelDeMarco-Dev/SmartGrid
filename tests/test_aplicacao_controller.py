@@ -34,7 +34,7 @@ def esperar(app, condicao, prazo=5.0):
 def placa():
     if os.name != "posix":
         pytest.skip("Integração com pseudoterminal real requer POSIX (os.openpty e tty).")
-    placa = PlacaVirtual.criar().iniciar()
+    placa = PlacaVirtual.criar(rele_fechado=True).iniciar()
     yield placa
     placa.parar()
 
@@ -55,7 +55,7 @@ def _conectar(app, placa, aplicacao):
     aplicacao.conectar_serial(ParametrosConexao(placa.caminho, 115200, 500))
     assert esperar(app, lambda: placa.estado == TELEMETRIA)
     # Ao entrar em telemetria o controller alinha o relé da placa ao banco.
-    assert esperar(app, lambda: any(m.comando is Comando.RELE for m in placa.pacotes_recebidos))
+    assert esperar(app, lambda: aplicacao._estado_reportado)
 
 
 def _descricoes():
@@ -92,7 +92,7 @@ def test_disparo_na_placa_e_gravado_e_avisado(app, placa, aplicacao):
     assert esperar(app, lambda: avisos)
     assert avisos == [""]
     assert RepositorioDispositivos().obter_por_tag("DISJ-01")["status"] == "ABERTO"
-    assert any("espontaneamente" in d for d in _descricoes())
+    assert any("Botão físico" in d for d in _descricoes())
 
 
 def test_cabo_arrancado_registra_alerta_e_libera_nova_conexao(app, placa, aplicacao):

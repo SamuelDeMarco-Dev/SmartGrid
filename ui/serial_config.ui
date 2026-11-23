@@ -223,7 +223,7 @@
         <item row="4" column="0">
          <widget class="QLabel" name="labelTaxaAmostragem">
           <property name="text">
-           <string>Taxa de amostragem (ms)</string>
+           <string>Intervalo de agregação (ms)</string>
           </property>
           <property name="buddy">
            <cstring>editTaxaAmostragem</cstring>
@@ -248,7 +248,7 @@
            <string>100 a 5000</string>
           </property>
           <property name="toolTip">
-           <string>Período da telemetria pedido à placa no handshake</string>
+           <string>Janela de médias no desktop; Timer1 fixo em 200 Hz. Recomendado: 115200 bps.</string>
           </property>
          </widget>
         </item>

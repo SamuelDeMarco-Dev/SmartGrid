@@ -22,7 +22,8 @@ class PlacaEmMemoria(PlacaVirtual):
         self.escritas = []
 
     def _enviar(self, pacote: bytes) -> None:
-        if not self.silenciosa:
+        if (not self.silenciosa and (not self.conexoes
+                or self.conexoes[-1].baudrate == self.baud)):
             self.respostas.extend(pacote)
 
     def injetar(self, pacote: bytes) -> None:

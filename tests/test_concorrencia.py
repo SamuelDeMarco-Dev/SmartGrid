@@ -139,7 +139,7 @@ def test_encerramento_cooperativo_drena_fila_e_libera_workers_em_ate_2_s(
     assert len(finalizado_serial) == len(finalizado_banco) == 1
     assert serial.isFinished() and banco.isFinished()
     assert not placa.conexoes[0].is_open
-    assert placa.pacotes_recebidos[-1].comando is Comando.BYE
+    assert placa.pacotes_recebidos[-1].comando is Comando.PAUSAR
     assert RepositorioLeituras().contar() >= salvas_antes + 100
     aguardar_qt(lambda: sip.isdeleted(serial) and sip.isdeleted(banco))
     assert not aplicacao_teste.serial_ativa
@@ -180,3 +180,30 @@ def test_pre_carga_preserva_amostra_recebida_durante_consulta(
         liberar.set()
         dash.view.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def test_fluxo_200_hz_agrega_persiste_e_mantem_gui_responsiva(
+    app, aplicacao_teste, serial_simulada, aguardar_qt,
+):
+    placa = serial_simulada(rele_fechado=True)
+    aplicacao_teste.conectar_serial(ParametrosConexao(placa.caminho, 115200, 500))
+    worker = aplicacao_teste._serial
+    leituras = QSignalSpy(worker.leitura_recebida)
+    cliques = []
+    timer = QTimer()
+    timer.setTimerType(Qt.TimerType.PreciseTimer)
+    timer.setInterval(5)
+    timer.timeout.connect(lambda: cliques.append(monotonic()))
+    inicio = monotonic()
+    timer.start()
+    try:
+        aguardar_qt(lambda: worker.pacotes_validos >= 220)
+        fim = monotonic()
+    finally:
+        timer.stop()
+    assert len(cliques) >= 50
+    assert max(b - a for a, b in zip([inicio, *cliques], [*cliques, fim])) <= 0.100
+    assert 8 <= len(leituras) <= 20
+    aguardar_qt(lambda: RepositorioLeituras().contar() >= 8)
+    assert RepositorioLeituras().contar() < worker.pacotes_validos / 5
+    assert worker.leituras_descartadas == aplicacao_teste.banco.leituras_descartadas == 0

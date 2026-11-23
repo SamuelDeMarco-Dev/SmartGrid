@@ -43,14 +43,14 @@ class Coletor:
 def placa():
     if os.name != "posix":
         pytest.skip("Integração com pseudoterminal real requer POSIX (os.openpty e tty).")
-    placa = PlacaVirtual.criar(tempo_sync_s=0.3).iniciar()
+    placa = PlacaVirtual.criar(rele_fechado=True).iniciar()
     yield placa
     placa.parar()
 
 
 def _worker(placa, baud=38400, intervalo_ms=100):
     worker = SerialWorker(placa.caminho, baud, intervalo_ms, timeout_ms=300)
-    worker.espera_retorno_placa_s = 0.5
+    worker.PRAZO_PRIMEIRO_HS_S = 0.3
     return worker, Coletor(worker)
 
 
@@ -69,12 +69,12 @@ def test_handshake_negocia_e_recebe_telemetria(app, placa):
         assert coletor.estados[:4] == ["ABRINDO_PORTA", "HANDSHAKE", "NEGOCIANDO", "TELEMETRIA"]
         assert coletor.disjuntor == [EstadoDisjuntor.FECHADO]
         # O primeiro pacote enviado pelo desktop é o handshake.
-        assert placa.pacotes_recebidos[0].comando is Comando.HS
+        assert placa.pacotes_recebidos[0].comando is Comando.INICIAR
     finally:
         _encerrar(app, worker)
 
 
-def test_parar_envia_bye_e_libera_a_porta(app, placa):
+def test_parar_envia_pausa_e_libera_a_porta(app, placa):
     worker, coletor = _worker(placa)
     worker.start()
     assert esperar(app, lambda: placa.estado == TELEMETRIA)
@@ -111,8 +111,8 @@ def test_disparo_na_placa_e_reportado(app, placa):
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Pseudoterminal real requer POSIX (os.openpty e tty).")
-def test_sync_falho_cai_para_a_velocidade_menor(app):
-    placa = PlacaVirtual.criar(tempo_sync_s=0.3, falhar_sync_em=(115200,)).iniciar()
+def test_inicio_recusado_cai_para_a_velocidade_menor(app):
+    placa = PlacaVirtual.criar(falhar_inicio_em=(115200,)).iniciar()
     worker, coletor = _worker(placa, baud=115200)
     worker.start()
     try:

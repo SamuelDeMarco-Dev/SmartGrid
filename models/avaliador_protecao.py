@@ -57,6 +57,10 @@ class Avaliacao:
 
 
 def valor_da_grandeza(leitura: Leitura, grandeza: Grandeza) -> float:
+    if leitura.picos is not None:
+        return leitura.picos[{
+            Grandeza.TENSAO: 0, Grandeza.CORRENTE: 1, Grandeza.POTENCIA: 2,
+        }[grandeza]]
     return {
         Grandeza.TENSAO: leitura.tensao,
         Grandeza.CORRENTE: leitura.corrente,
@@ -103,16 +107,17 @@ class AvaliadorProtecao:
             return Avaliacao(NivelProtecao.CRITICO, violacoes, nova)
 
         self._em_violacao = False
-        if leitura.potencia >= self.setpoint_w * FRACAO_ATENCAO:
+        if valor_da_grandeza(leitura, Grandeza.POTENCIA) >= self.setpoint_w * FRACAO_ATENCAO:
             return Avaliacao(NivelProtecao.ATENCAO)
         return Avaliacao(NivelProtecao.NORMAL)
 
     def _violacoes(self, leitura: Leitura) -> list[Violacao]:
         fora = []
-        if leitura.potencia > self.setpoint_w:
+        potencia = valor_da_grandeza(leitura, Grandeza.POTENCIA)
+        if potencia > self.setpoint_w:
             fora.append(Violacao(
-                f"potência em {leitura.potencia:.0f} W",
-                Grandeza.POTENCIA, leitura.potencia, self.setpoint_w,
+                f"potência em {potencia:.0f} W (máximo da janela)",
+                Grandeza.POTENCIA, potencia, self.setpoint_w,
             ))
         for regra in self.regras:
             valor = valor_da_grandeza(leitura, regra.grandeza)
