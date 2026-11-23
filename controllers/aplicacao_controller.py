@@ -22,6 +22,8 @@ Fiação
 - Intenção persistida (``estado_disjuntor_alterado``) → ``RELE`` pendente.
   Só telemetria compatível confirma o estado. A situação exibida é publicada
   separadamente, sem confundir o COMMIT com uma atuação da placa.
+- ``SerialWorker.botao_acionado`` → corte solicitado pelo desktop. O botão da
+  placa só é reportado na telemetria; quem abre o relé é o software.
 
 Ciclo de vida
 -------------
@@ -54,14 +56,15 @@ logger = logging.getLogger("smartgrid")
 class AplicacaoController(QObject):
     """Dono das threads de serial e de banco."""
 
-    #: Disjuntor aberto pela proteção da placa, já refletido no banco quando
-    #: possível. Carrega a mensagem de erro de gravação ("" se gravou).
+    #: Disjuntor aberto pela proteção (botão da placa ou abertura sem comando),
+    #: já refletido no banco quando possível. Carrega a mensagem de erro de
+    #: gravação ("" se gravou).
     disparo_espontaneo = pyqtSignal(str)
     disparo_simulado = pyqtSignal(str)
     situacao_disjuntor_alterada = pyqtSignal(object)
     operacao_falhou = pyqtSignal(str)
 
-    #: Velocidade (bps) que a placa confirmou no SYNC; repassada do SerialWorker
+    #: Velocidade (bps) em que a placa passou a enviar amostras; repassada do SerialWorker
     #: para a tela de comunicação serial.
     velocidade_negociada = pyqtSignal(int)
 
@@ -87,6 +90,7 @@ class AplicacaoController(QObject):
         self._link_ativo = False
         self._primeira_telemetria = True
         self._simulando_disparo = False
+        self._disparo_pelo_botao = False
         self._ultima_leitura = Leitura.zerada()
         self._serial: SerialWorker | None = None
 
@@ -137,6 +141,7 @@ class AplicacaoController(QObject):
         worker.disjuntor_reportado.connect(self._ao_disjuntor_reportado)
         worker.rele_confirmado.connect(self._ao_rele_confirmado)
         worker.rele_falhou.connect(self._ao_rele_falhou)
+        worker.botao_acionado.connect(self._ao_botao_acionado)
         worker.finished.connect(self._ao_serial_encerrada)
         worker.finished.connect(worker.deleteLater)
         self._serial = worker
@@ -241,8 +246,12 @@ class AplicacaoController(QObject):
             return
         if estado is self._estado_solicitado:
             self._publicar_situacao(ConfirmacaoDisjuntor.CONFIRMADO)
-        elif estado is EstadoDisjuntor.ABERTO and (primeira or anterior is EstadoDisjuntor.FECHADO):
-            # Inclui D2 durante a desconexão: exige novo religamento manual.
+        elif estado is EstadoDisjuntor.ABERTO and primeira:
+            # A placa liga com o relé desligado e o UNO reinicia ao abrir a
+            # porta: é o estado de boot, não um disparo. Nunca religa sozinho.
+            self._registrar_disparo(inicial=True)
+        elif estado is EstadoDisjuntor.ABERTO and anterior is EstadoDisjuntor.FECHADO:
+            # Abriu sem comando (ex.: placa reiniciou): exige religamento manual.
             self._registrar_disparo()
         elif primeira and self._estado_solicitado is EstadoDisjuntor.ABERTO:
             # Uma única tentativa segura de corte por conexão. Se falhar,
@@ -255,8 +264,11 @@ class AplicacaoController(QObject):
             )
             barramento.registrar_evento(TipoEvento.ALERTA, self._situacao.detalhe)
 
-    def _registrar_disparo(self) -> None:
-        logger.warning("Abertura espontânea do disjuntor; religamento exige ação manual.")
+    def _registrar_disparo(self, *, inicial: bool = False) -> None:
+        if inicial:
+            logger.info("Placa iniciou com o relé desligado; religamento exige ação manual.")
+        else:
+            logger.warning("Abertura espontânea do disjuntor; religamento exige ação manual.")
         self._estado_solicitado = EstadoDisjuntor.ABERTO
         self._publicar_situacao(
             ConfirmacaoDisjuntor.CONFIRMADO if self._estado_reportado is not None
@@ -264,10 +276,20 @@ class AplicacaoController(QObject):
         )
         self.banco.executar(
             self._servico_corte.registrar_disparo_espontaneo,
-            self._ultima_leitura.resumo(),
-            ao_concluir=lambda _evento: self.disparo_espontaneo.emit(""),
+            self._ultima_leitura.resumo(), inicial=inicial,
+            ao_concluir=None if inicial else lambda _evento: self.disparo_espontaneo.emit(""),
             ao_falhar=self._ao_falhar_registro_disparo,
         )
+
+    def _ao_botao_acionado(self) -> None:
+        """Botão da placa: o firmware só o reporta; o desktop comanda o corte."""
+        if self.sender() is not self._serial or not self._link_ativo:
+            return
+        resumo = self._ultima_leitura.resumo()
+        barramento.registrar_evento(TipoEvento.ALERTA, "Botão de proteção acionado na placa", resumo)
+        if self.comando_pendente or self._estado_reportado is not EstadoDisjuntor.FECHADO:
+            return
+        self._disparo_pelo_botao = self.solicitar_estado_disjuntor(EstadoDisjuntor.ABERTO, resumo)
 
     def _ao_falhar_registro_disparo(self, erro: Exception) -> None:
         logger.error("Falha ao registrar o disparo espontâneo no banco: %s", erro)
@@ -314,6 +336,9 @@ class AplicacaoController(QObject):
         if self._simulando_disparo:
             self._simulando_disparo = False
             self.disparo_simulado.emit("")
+        if self._disparo_pelo_botao:
+            self._disparo_pelo_botao = False
+            self.disparo_espontaneo.emit("")
 
     def _ao_rele_falhou(self, destino: EstadoDisjuntor, motivo: str) -> None:
         if self.sender() is self._serial and destino is self._destino_pendente:
@@ -338,6 +363,7 @@ class AplicacaoController(QObject):
     def _falhar_operacao(self, motivo: str, *, registrar: bool = True) -> None:
         self._destino_pendente = None
         self._simulando_disparo = False
+        self._disparo_pelo_botao = False
         self._publicar_situacao(ConfirmacaoDisjuntor.FALHA, motivo)
         if registrar:
             barramento.registrar_evento(TipoEvento.ALERTA, f"Falha de confirmação: {motivo}")

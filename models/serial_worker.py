@@ -10,22 +10,28 @@ aplicação só enxerga sinais, entregues na thread de quem os escuta
 ``velocidade_negociada(int)``
     Velocidade em que a telemetria passou a fluir.
 ``leitura_recebida(Leitura)``
-    Cada pacote ``TLM`` válido.
+    Média das amostras ``DAT`` de cada intervalo de telemetria.
 ``disjuntor_reportado(EstadoDisjuntor)``
-    Estado de cada telemetria válida, inclusive quando não muda.
+    Estado de cada leitura publicada, inclusive quando não muda.
 ``rele_confirmado(EstadoDisjuntor)`` / ``rele_falhou(EstadoDisjuntor, str)``
     Resultado único por comando. ACK sozinho não confirma a atuação:
     é necessário receber telemetria posterior compatível.
+``botao_acionado()``
+    O botão da placa foi pressionado (borda de subida, sem repique).
 ``link_perdido(str)``
     Cabo arrancado, erro de I/O ou placa em silêncio. A thread termina.
 
-Sequência (``models/protocolo.py``): abre SEMPRE a 9600 bps, repete o ``HS``
-até a placa responder (o UNO reinicia ao abrir a porta), troca para a
-velocidade aceita e confirma com ``SYNC``. Se o ``SYNC`` falhar, espera a
-placa voltar a 9600 e tenta a próxima velocidade menor.
+Sequência (``models/protocolo.py``): abre SEMPRE a 9600 bps e repete
+``!S<baud>`` até a placa responder ``ACK: INICIANDO`` (o UNO reinicia ao
+abrir a porta). Troca para a velocidade pedida e espera a primeira amostra
+``DAT``. Se ela não chegar, envia ``!P`` (a placa volta a 9600) e tenta a
+próxima velocidade menor.
+
+A placa amostra a 200 Hz. O worker agrega as amostras e publica uma leitura
+a cada ``intervalo_ms`` — a taxa de amostragem configurada no desktop.
 
 Encerramento cooperativo: :meth:`parar` pede a interrupção; o laço percebe em
-até ``PERIODO_LEITURA_S``, envia ``BYE``, fecha a porta e ``run`` retorna,
+até ``PERIODO_LEITURA_S``, envia ``!P``, fecha a porta e ``run`` retorna,
 disparando ``finished`` (o controller liga ``finished`` a ``deleteLater``).
 """
 
@@ -45,7 +51,7 @@ from models import protocolo
 from models.estado_disjuntor import EstadoDisjuntor
 from models.estado_link import EstadoLink
 from models.leitura import Leitura
-from models.protocolo import Comando, ErroProtocolo
+from models.protocolo import Amostra, ErroProtocolo, Resposta, TipoResposta
 
 logger = logging.getLogger("smartgrid")
 
@@ -71,22 +77,26 @@ class SerialWorker(QThread):
     disjuntor_reportado = pyqtSignal(EstadoDisjuntor)
     rele_confirmado = pyqtSignal(EstadoDisjuntor)
     rele_falhou = pyqtSignal(EstadoDisjuntor, str)
+    botao_acionado = pyqtSignal()
     link_perdido = pyqtSignal(str)
 
     #: Timeout de cada ``read``: limita a demora para perceber ``parar()``.
     PERIODO_LEITURA_S = 0.1
 
-    #: Intervalo entre repetições do ``HS`` enquanto a placa não responde.
-    PERIODO_HS_S = 0.5
+    #: Intervalo entre repetições do ``!S`` enquanto a placa não responde.
+    PERIODO_INICIO_S = 0.5
 
-    #: Prazo do primeiro handshake — cobre os ~2 s de boot do UNO após o DTR.
-    PRAZO_PRIMEIRO_HS_S = 6.0
+    #: Prazo do primeiro ``!S`` — cobre os ~2 s de boot do UNO após o DTR.
+    PRAZO_PRIMEIRO_INICIO_S = 6.0
 
-    #: Prazo dos handshakes seguintes, depois de um ``SYNC`` que falhou.
-    PRAZO_HS_S = 3.0
+    #: Prazo dos ``!S`` seguintes, depois de uma velocidade que falhou.
+    PRAZO_INICIO_S = 3.0
 
-    #: Espera pelo ``ACK,SYNC`` na nova velocidade.
-    PRAZO_SYNC_S = 1.0
+    #: Espera pela primeira amostra ``DAT`` na nova velocidade.
+    PRAZO_PRIMEIRA_AMOSTRA_S = 1.0
+
+    #: Botão solto por pelo menos este tempo antes de uma nova borda valer.
+    DEBOUNCE_BOTAO_S = 0.05
 
     def __init__(
         self,
@@ -103,14 +113,18 @@ class SerialWorker(QThread):
         self.porta = porta
         self.baud_alvo = baud_alvo
         self.intervalo_ms = intervalo_ms
+        self.intervalo_s = intervalo_ms / 1000
         #: Silêncio tolerado na telemetria antes de declarar o link perdido.
         self.limite_silencio_s = 3 * intervalo_ms / 1000 + timeout_ms / 1000
         self.prazo_confirmacao_s = max(1.0, 2 * intervalo_ms / 1000 + timeout_ms / 1000)
-        #: Depois de um ``SYNC`` sem resposta, quanto esperar a placa voltar a 9600.
-        self.espera_retorno_placa_s = protocolo.TEMPO_SYNC_S + 0.2
+        #: Depois do ``!P``, quanto esperar a placa voltar a 9600.
+        self.espera_retorno_placa_s = 0.2
 
         self._serial: serial.Serial | None = None
         self._buffer = b""
+        self._janela: list[Amostra] = []
+        self._ignorar_amostras = 0
+        self._botao_solto_desde: float | None = None
         self._comandos: queue.SimpleQueue[_PedidoRele] = queue.SimpleQueue()
         self._trava_rele = threading.Lock()
         self._pedido_rele: _PedidoRele | None = None
@@ -183,7 +197,7 @@ class SerialWorker(QThread):
         interrompido = self.isInterruptionRequested()
         try:
             if interrompido and self._serial.is_open:
-                self._serial.write(protocolo.bye())
+                self._serial.write(protocolo.pausar())
                 self._serial.flush()
         except (serial.SerialException, OSError):
             pass  # a porta já pode ter sumido
@@ -200,87 +214,87 @@ class SerialWorker(QThread):
     # Handshake e negociação
     # ------------------------------------------------------------------
     def _negociar(self) -> int:
-        prazo_hs = self.PRAZO_PRIMEIRO_HS_S
+        prazo = self.PRAZO_PRIMEIRO_INICIO_S
         for baud in protocolo.velocidades_para_tentar(self.baud_alvo):
-            self._serial.baudrate = protocolo.VELOCIDADE_INICIAL
-            self._serial.reset_input_buffer()
-            self._buffer = b""
+            self._trocar_velocidade(protocolo.VELOCIDADE_INICIAL)
             self._mudar_estado(
                 EstadoLink.HANDSHAKE, f"Propondo {baud} bps, intervalo {self.intervalo_ms} ms"
             )
 
-            if not self._handshake(baud, prazo_hs):
+            if not self._iniciar(baud, prazo):
                 continue
-            prazo_hs = self.PRAZO_HS_S
+            prazo = self.PRAZO_INICIO_S
 
-            self._serial.baudrate = baud
+            self._trocar_velocidade(baud)
             self._mudar_estado(EstadoLink.NEGOCIANDO, f"Confirmando {baud} bps")
-            if self._sincronizar():
+            if self._aguardar_amostra():
                 logger.info("Handshake concluído: telemetria a %d bps.", baud)
                 return baud
 
-            logger.warning("Placa não confirmou %d bps; tentando velocidade menor.", baud)
-            # Sem o SYNC a placa volta sozinha a 9600 depois de TEMPO_SYNC_S.
+            logger.warning("Sem amostras a %d bps; tentando velocidade menor.", baud)
+            # A placa não tem watchdog: só o !P a traz de volta a 9600.
+            self._serial.write(protocolo.pausar())
             self._dormir(self.espera_retorno_placa_s)
 
         raise ErroLink("A placa não respondeu ao handshake em nenhuma velocidade.")
 
-    def _handshake(self, baud: int, prazo_s: float) -> bool:
-        """Repete o ``HS`` até o ``ACK``; False em ``NAK`` ou prazo esgotado."""
+    def _iniciar(self, baud: int, prazo_s: float) -> bool:
+        """Repete o ``!S`` até o ACK; False em ``ERR`` ou prazo esgotado."""
         limite = time.monotonic() + prazo_s
         proximo_envio = 0.0
         while time.monotonic() < limite:
             self._verificar_interrupcao()
             if time.monotonic() >= proximo_envio:
-                self._serial.write(protocolo.handshake(baud, self.intervalo_ms))
-                proximo_envio = time.monotonic() + self.PERIODO_HS_S
+                self._serial.write(protocolo.iniciar(baud))
+                proximo_envio = time.monotonic() + self.PERIODO_INICIO_S
 
             for mensagem in self._ler_mensagens():
-                if protocolo.e_ack(mensagem, Comando.HS.value):
-                    try:
-                        aceito = protocolo.decodificar_handshake(mensagem)
-                    except ErroProtocolo as erro:
-                        self._descartar(erro)
-                        continue
-                    if aceito == (baud, self.intervalo_ms):
-                        return True
-                elif mensagem.comando is Comando.NAK:
-                    logger.warning("Placa recusou %d bps: %s", baud, ",".join(mensagem.campos))
+                if not isinstance(mensagem, Resposta):
+                    continue
+                if mensagem.tipo is TipoResposta.INICIANDO and mensagem.baud == baud:
+                    return True
+                if mensagem.tipo is TipoResposta.ERRO:
+                    logger.warning("Placa recusou %d bps: %s", baud, mensagem.texto)
                     return False
-        logger.warning("Sem ACK ao handshake de %d bps.", baud)
+        logger.warning("Sem ACK ao início em %d bps.", baud)
         return False
 
-    def _sincronizar(self) -> bool:
-        self._buffer = b""
-        self._serial.reset_input_buffer()
-        self._serial.write(protocolo.sync())
-        limite = time.monotonic() + self.PRAZO_SYNC_S
+    def _aguardar_amostra(self) -> bool:
+        limite = time.monotonic() + self.PRAZO_PRIMEIRA_AMOSTRA_S
         while time.monotonic() < limite:
             self._verificar_interrupcao()
-            for mensagem in self._ler_mensagens():
-                if protocolo.e_ack(mensagem, Comando.SYNC.value):
-                    return True
+            if any(isinstance(m, Amostra) for m in self._ler_mensagens()):
+                return True
         return False
+
+    def _trocar_velocidade(self, baud: int) -> None:
+        self._serial.baudrate = baud
+        self._serial.reset_input_buffer()
+        self._buffer = b""
 
     # ------------------------------------------------------------------
     # Telemetria
     # ------------------------------------------------------------------
     def _receber_telemetria(self) -> None:
         ultimo_pacote = time.monotonic()
-        proximo_ping = 0.0
+        fim_janela = ultimo_pacote + self.intervalo_s
+        self._janela.clear()
         while not self.isInterruptionRequested():
-            agora = time.monotonic()
-            if agora >= proximo_ping:
-                self._serial.write(protocolo.ping())
-                proximo_ping = agora + protocolo.PERIODO_PING_S
             # Processa primeiro o que já chegou. Uma amostra que estava no
             # buffer antes do envio não deve confirmar o próximo comando.
             for mensagem in self._ler_mensagens():
-                if mensagem.comando is Comando.TLM:
-                    if self._tratar_telemetria(mensagem):
-                        ultimo_pacote = time.monotonic()
-                elif protocolo.e_ack(mensagem, Comando.RELE.value):
+                if isinstance(mensagem, Amostra):
+                    ultimo_pacote = time.monotonic()
+                    self._tratar_amostra(mensagem)
+                elif isinstance(mensagem, Resposta) and mensagem.tipo in (
+                    TipoResposta.RELE_LIGADO, TipoResposta.RELE_DESLIGADO,
+                ):
                     self._tratar_ack_rele(mensagem)
+
+            agora = time.monotonic()
+            if agora >= fim_janela:
+                fim_janela = agora + self.intervalo_s
+                self._publicar_janela()
 
             self._verificar_prazo_rele()
             silencio = time.monotonic() - ultimo_pacote
@@ -292,23 +306,47 @@ class SerialWorker(QThread):
                 except queue.Empty:
                     pass
                 else:
-                    # Fragmentos iniciados antes do comando não podem ser
-                    # completados depois e usados como sua confirmação.
+                    # Fragmentos e amostras anteriores ao comando não podem
+                    # ser usados como sua confirmação.
                     self._buffer = b""
+                    self._janela.clear()
+                    self._ignorar_amostras = 0
                     self._serial.write(protocolo.rele(pedido.destino.energizado))
                     pedido.prazo = time.monotonic() + self.prazo_confirmacao_s
 
-    def _tratar_telemetria(self, mensagem: protocolo.Mensagem) -> bool:
-        try:
-            tlm = protocolo.decodificar_telemetria(mensagem)
-        except ErroProtocolo as erro:
-            self._descartar(erro)
-            return False
+    def _tratar_amostra(self, amostra: Amostra) -> None:
+        agora = time.monotonic()
+        if amostra.botao_pressionado:
+            solto = self._botao_solto_desde
+            if solto is not None and agora - solto >= self.DEBOUNCE_BOTAO_S:
+                logger.info("Botão da placa acionado.")
+                self.botao_acionado.emit()
+            self._botao_solto_desde = None
+        elif self._botao_solto_desde is None:
+            self._botao_solto_desde = agora
+
+        if self._ignorar_amostras:
+            self._ignorar_amostras -= 1
+            return
+        self._janela.append(amostra)
+
+    def _publicar_janela(self) -> None:
+        if not self._janela:
+            return
+        amostras, self._janela = self._janela, []
+        tensao, corrente = protocolo.converter(
+            sum(a.a0 for a in amostras) / len(amostras),
+            sum(a.a1 for a in amostras) / len(amostras),
+        )
+        fechado = amostras[-1].rele_ligado
+        if not fechado:
+            # Sem carga não há corrente; o potenciômetro da bancada não sabe disso.
+            corrente = 0.0
 
         self.leitura_recebida.emit(
-            Leitura(instante=datetime.now(), tensao=tlm.tensao, corrente=tlm.corrente)
+            Leitura(instante=datetime.now(), tensao=tensao, corrente=corrente)
         )
-        estado = EstadoDisjuntor.FECHADO if tlm.disjuntor_fechado else EstadoDisjuntor.ABERTO
+        estado = EstadoDisjuntor.FECHADO if fechado else EstadoDisjuntor.ABERTO
         self._disjuntor = estado
         self.disjuntor_reportado.emit(estado)
         pedido = self._pedido_rele
@@ -323,19 +361,19 @@ class SerialWorker(QThread):
                     f"A placa aceitou {pedido.destino.name}, mas a telemetria "
                     f"posterior reportou {estado.name}."
                 )
-        return True
 
-    def _tratar_ack_rele(self, mensagem: protocolo.Mensagem) -> None:
-        if len(mensagem.campos) != 2 or mensagem.campos[1] not in ("0", "1"):
-            self._descartar(ErroProtocolo("ACK de RELE inválido."))
-            return
+    def _tratar_ack_rele(self, resposta: Resposta) -> None:
         pedido = self._pedido_rele
         if pedido is None or pedido.prazo is None:
             return  # ACK atrasado ou sem comando correspondente
-        if mensagem.campos[1] != ("1" if pedido.destino.energizado else "0"):
+        if (resposta.tipo is TipoResposta.RELE_LIGADO) != pedido.destino.energizado:
             logger.warning("ACK de RELE não corresponde ao comando pendente.")
             return
         pedido.ack = True
+        # O Timer1 pode ter capturado a amostra seguinte antes da troca do
+        # relé: ela sai depois do ACK, mas com o estado antigo.
+        self._janela.clear()
+        self._ignorar_amostras = 1
 
     def _verificar_prazo_rele(self) -> None:
         pedido = self._pedido_rele
@@ -362,8 +400,11 @@ class SerialWorker(QThread):
     # ------------------------------------------------------------------
     # Leitura de bytes
     # ------------------------------------------------------------------
-    def _ler_mensagens(self) -> list[protocolo.Mensagem]:
-        """Lê o que houver (até ``PERIODO_LEITURA_S``) e devolve os pacotes completos."""
+    def _ler_mensagens(self) -> list[Amostra | Resposta]:
+        """Lê o que houver (até ``PERIODO_LEITURA_S``) e devolve as linhas completas.
+
+        Texto informativo (o banner do boot) é ignorado sem contar como descarte.
+        """
         dados = self._serial.read(max(1, self._serial.in_waiting))
         if not dados:
             return []
@@ -375,9 +416,12 @@ class SerialWorker(QThread):
             if not linha.strip():
                 continue
             try:
-                mensagens.append(protocolo.interpretar(linha))
+                mensagem = protocolo.interpretar(linha)
             except ErroProtocolo as erro:
                 self._descartar(erro)
+                continue
+            if mensagem is not None:
+                mensagens.append(mensagem)
         if len(self._buffer) > protocolo.TAMANHO_MAXIMO:
             self._buffer = b""  # lixo sem \n (ex.: velocidade trocada)
         return mensagens

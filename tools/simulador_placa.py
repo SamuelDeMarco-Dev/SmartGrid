@@ -1,19 +1,19 @@
 """Placa de medição virtual — o Arduino UNO emulado num pseudo-terminal.
 
-Implementa a mesma máquina de estados de ``firmware/smartgrid_placa`` (ver
-``models/protocolo.py``), para testar e demonstrar o supervisório sem o
+Reproduz o firmware do professor (``firmware/smartgrid_placa``, ver
+``models/protocolo.py``) para testar e demonstrar o supervisório sem o
 hardware. A pty não tem velocidade física: a troca de baud rate é só lógica,
-mas a sequência de pacotes é idêntica à da placa real.
+mas as linhas trocadas são idênticas às da placa real.
 
 Uso (macOS/Linux)::
 
     python tools/simulador_placa.py              # mostra o caminho da porta
-    python tools/simulador_placa.py --falhar-sync 115200
+    python tools/simulador_placa.py --falhar-em 115200
 
 Copie o caminho exibido (ex.: ``/dev/ttys004``) para o campo de porta da tela
 "Comunicação Serial". Comandos no terminal do simulador:
 
-    d  disparo da proteção (abre o disjuntor, como o botão da placa)
+    b  pressiona o botão da placa (D11) por um instante
     x  arranca o "cabo" (fecha a pty; o desktop deve detectar a queda)
     q  sair
 """
@@ -32,12 +32,16 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from models import protocolo
-from models.protocolo import Comando, ErroProtocolo
 from models.simulador_telemetria import gerar_leitura
 
-AGUARDANDO_LINK = "AGUARDANDO_LINK"
-AGUARDANDO_SYNC = "AGUARDANDO_SYNC"
-TELEMETRIA = "TELEMETRIA"
+#: Tamanho do ``bufferCmd`` do firmware (15 caracteres + terminador).
+TAMANHO_COMANDO = 15
+
+#: Quanto tempo ``pressionar_botao`` mantém o botão em nível alto.
+DURACAO_BOTAO_S = 0.2
+
+#: Máximo de amostras atrasadas enviadas de uma vez pelo laço da placa.
+RAJADA_MAXIMA = 5
 
 
 class PlacaVirtual:
@@ -48,29 +52,19 @@ class PlacaVirtual:
         fd_mestre: int,
         caminho: str,
         *,
-        falhar_sync_em: tuple[int, ...] = (),
-        tempo_sync_s: float = protocolo.TEMPO_SYNC_S,
-        watchdog_s: float = protocolo.WATCHDOG_PLACA_S,
+        falhar_em: tuple[int, ...] = (),
+        periodo_amostra_s: float = protocolo.PERIODO_AMOSTRA_S,
     ) -> None:
         self.caminho = caminho
         self._fd = fd_mestre
-        self._falhar_sync_em = set(falhar_sync_em)
-        self._tempo_sync_s = tempo_sync_s
-        self._watchdog_s = watchdog_s
+        self._falhar_em = set(falhar_em)
+        self._periodo_amostra_s = periodo_amostra_s
 
-        self.estado = AGUARDANDO_LINK
-        self.baud = protocolo.VELOCIDADE_INICIAL
-        self.rele_fechado = True
-        self.pacotes_recebidos: list[protocolo.Mensagem] = []
-
-        self._intervalo_s = 1.0
-        self._seq = 0
-        self._prazo_sync = 0.0
-        self._ultimo_host = 0.0
-        self._proxima_tlm = 0.0
-        self._buffer = b""
+        #: Comandos já processados, sem o ``!`` (ex.: ``"S115200"``, ``"0"``).
+        self.comandos_recebidos: list[str] = []
         self._parar = threading.Event()
         self._thread = threading.Thread(target=self._laco, daemon=True)
+        self.reiniciar()
 
     @classmethod
     def criar(cls, **opcoes) -> "PlacaVirtual":
@@ -93,6 +87,19 @@ class PlacaVirtual:
         placa._fd_escravo = escravo
         return placa
 
+    def reiniciar(self) -> None:
+        """Equivale ao ``setup()``: relé desligado, conversão parada, 9600 bps."""
+        self.conversao_habilitada = False
+        self.baud = protocolo.VELOCIDADE_INICIAL
+        self.rele_fechado = False
+        self.botao_pressionado = False
+        self._soltar_botao_em = 0.0
+        self._proxima_amostra = 0.0
+        self._buffer_cmd = ""
+        self._gravando_cmd = False
+        for texto in protocolo.BANNER:
+            self._enviar(protocolo.linha(texto))
+
     # ------------------------------------------------------------------
     # Controle
     # ------------------------------------------------------------------
@@ -111,9 +118,10 @@ class PlacaVirtual:
             except OSError:
                 pass
 
-    def disparar(self) -> None:
-        """Botão de proteção: abre a carga sem comando do desktop."""
-        self.rele_fechado = False
+    def pressionar_botao(self, duracao_s: float = DURACAO_BOTAO_S) -> None:
+        """Botão em D11: só aparece no campo ``botao`` das amostras."""
+        self.botao_pressionado = True
+        self._soltar_botao_em = time.monotonic() + duracao_s
 
     def arrancar_cabo(self) -> None:
         """Fecha o mestre: para o desktop é o cabo USB sendo puxado."""
@@ -129,7 +137,7 @@ class PlacaVirtual:
     def _laco(self) -> None:
         while not self._parar.is_set():
             try:
-                prontos, _, _ = select.select([self._fd], [], [], 0.02)
+                prontos, _, _ = select.select([self._fd], [], [], 0.005)
                 if prontos:
                     self._receber(os.read(self._fd, 256))
             except OSError:
@@ -139,71 +147,76 @@ class PlacaVirtual:
             self._temporizar(time.monotonic())
 
     def _receber(self, dados: bytes) -> None:
-        self._buffer += dados
-        while b"\n" in self._buffer:
-            linha, self._buffer = self._buffer.split(b"\n", 1)
-            try:
-                mensagem = protocolo.interpretar(linha)
-            except ErroProtocolo:
-                continue  # ruído: a placa real também ignora
-            self.pacotes_recebidos.append(mensagem)
-            self._tratar(mensagem, time.monotonic())
+        """Mesmo parser caractere a caractere do ``loop()`` do firmware."""
+        for c in dados.decode("ascii", errors="replace"):
+            if c == protocolo.INICIO_COMANDO:
+                self._gravando_cmd = True
+                self._buffer_cmd = ""
+            elif self._gravando_cmd:
+                if c in "\r\n":
+                    if self._buffer_cmd:
+                        self._processar(self._buffer_cmd)
+                    self._gravando_cmd = False
+                    self._buffer_cmd = ""
+                elif len(self._buffer_cmd) < TAMANHO_COMANDO and c != " ":
+                    self._buffer_cmd += c
 
-    def _tratar(self, mensagem: protocolo.Mensagem, agora: float) -> None:
-        self._ultimo_host = agora
+    def _processar(self, cmd: str) -> None:
+        self.comandos_recebidos.append(cmd)
+        if cmd[0] in "Ss":
+            self._iniciar_conversao(cmd[1:])
+        elif cmd.upper() in ("P", "STOP"):
+            self.conversao_habilitada = False
+            self._enviar(protocolo.resposta_pausada())
+            self.baud = protocolo.VELOCIDADE_INICIAL
+        elif cmd in ("1", "L", "l"):
+            self._acionar_rele(True)
+            self._enviar(protocolo.resposta_rele(True))
+        elif cmd in ("0", "D", "d"):
+            self._acionar_rele(False)
+            self._enviar(protocolo.resposta_rele(False))
+        elif cmd in ("T", "t"):
+            self._acionar_rele(not self.rele_fechado)
+            self._enviar(protocolo.resposta_rele_alternado())
 
-        if self.estado == AGUARDANDO_LINK:
-            if mensagem.comando is Comando.HS:
-                self._tratar_handshake(mensagem, agora)
-            return  # nada além do HS é aceito antes do link
-
-        if self.estado == AGUARDANDO_SYNC:
-            if mensagem.comando is Comando.SYNC and self.baud not in self._falhar_sync_em:
-                self._enviar(protocolo.ack(Comando.SYNC.value))
-                self.estado = TELEMETRIA
-                self._proxima_tlm = agora
+    def _iniciar_conversao(self, argumento: str) -> None:
+        baud = 115200
+        if argumento:
+            digitos = ""
+            for c in argumento:  # strtoul: para no primeiro não dígito
+                if not c.isdigit():
+                    break
+                digitos += c
+            baud = int(digitos) if digitos else 0
+        if baud not in protocolo.VELOCIDADES:
+            self._enviar(protocolo.resposta_baud_invalido())
             return
+        # O ACK sai na velocidade atual; só depois a placa troca.
+        self._enviar(protocolo.resposta_iniciando(baud))
+        if baud != protocolo.VELOCIDADE_INICIAL:
+            self.baud = baud
+        self.conversao_habilitada = True
+        self._proxima_amostra = time.monotonic()
 
-        if mensagem.comando is Comando.RELE and mensagem.campos in (("0",), ("1",)):
-            self.rele_fechado = mensagem.campos[0] == "1"
-            self._enviar(protocolo.ack(Comando.RELE.value, mensagem.campos[0]))
-        elif mensagem.comando is Comando.BYE:
-            self._voltar_a_esperar()
-
-    def _tratar_handshake(self, mensagem: protocolo.Mensagem, agora: float) -> None:
-        try:
-            baud, intervalo_ms = protocolo.decodificar_handshake(mensagem)
-        except ErroProtocolo as erro:
-            self._enviar(protocolo.nak(str(erro).replace(",", ";")[:40]))
-            return
-        # O ACK sai ainda em 9600; só depois a placa troca de velocidade.
-        self._enviar(protocolo.ack(Comando.HS.value, baud, intervalo_ms))
-        self.baud = baud
-        self._intervalo_s = intervalo_ms / 1000
-        self.estado = AGUARDANDO_SYNC
-        self._prazo_sync = agora + self._tempo_sync_s
+    def _acionar_rele(self, ligar: bool) -> None:
+        self.rele_fechado = ligar
 
     def _temporizar(self, agora: float) -> None:
-        if self.estado == AGUARDANDO_SYNC and agora > self._prazo_sync:
-            self._voltar_a_esperar()
-        elif self.estado == TELEMETRIA:
-            if agora - self._ultimo_host > self._watchdog_s:
-                self._voltar_a_esperar()
-            elif agora >= self._proxima_tlm:
-                self._proxima_tlm = agora + self._intervalo_s
-                self._enviar_telemetria()
+        if self.botao_pressionado and agora >= self._soltar_botao_em:
+            self.botao_pressionado = False
+        if not self.conversao_habilitada or agora < self._proxima_amostra:
+            return
+        atrasadas = int((agora - self._proxima_amostra) / self._periodo_amostra_s) + 1
+        for _ in range(min(atrasadas, RAJADA_MAXIMA)):
+            self._enviar_amostra()
+        self._proxima_amostra = agora + self._periodo_amostra_s
 
-    def _enviar_telemetria(self) -> None:
+    def _enviar_amostra(self) -> None:
+        if self.baud in self._falhar_em:
+            return  # enlace ruim nesta velocidade: nada chega ao desktop
         leitura = gerar_leitura()
-        corrente = leitura.corrente if self.rele_fechado else 0.0
-        self._seq += 1
-        self._enviar(
-            protocolo.telemetria(self._seq, leitura.tensao, corrente, self.rele_fechado)
-        )
-
-    def _voltar_a_esperar(self) -> None:
-        self.estado = AGUARDANDO_LINK
-        self.baud = protocolo.VELOCIDADE_INICIAL
+        a0, a1 = protocolo.para_adc(leitura.tensao, leitura.corrente)
+        self._enviar(protocolo.amostra(a0, a1, self.rele_fechado, self.botao_pressionado))
 
     def _enviar(self, pacote: bytes) -> None:
         try:
@@ -215,31 +228,34 @@ class PlacaVirtual:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
-        "--falhar-sync",
+        "--falhar-em",
         type=int,
         nargs="*",
         default=[],
-        help="velocidades em que o SYNC é ignorado (testa o fallback)",
+        help="velocidades em que as amostras não chegam (testa o fallback)",
     )
     args = parser.parse_args()
 
-    placa = PlacaVirtual.criar(falhar_sync_em=tuple(args.falhar_sync)).iniciar()
+    placa = PlacaVirtual.criar(falhar_em=tuple(args.falhar_em)).iniciar()
     print(f"Placa virtual pronta em: {placa.caminho}")
-    print("Comandos: d = disparo da proteção · x = arrancar o cabo · q = sair")
+    print("Comandos: b = pressionar o botão · x = arrancar o cabo · q = sair")
 
     estado_anterior = None
     try:
         while True:
             prontos, _, _ = select.select([sys.stdin], [], [], 0.5)
-            if placa.estado != estado_anterior:
-                estado_anterior = placa.estado
-                print(f"[placa] {placa.estado} @ {placa.baud} bps")
+            estado = (placa.conversao_habilitada, placa.baud, placa.rele_fechado)
+            if estado != estado_anterior:
+                estado_anterior = estado
+                conversao = "convertendo" if placa.conversao_habilitada else "em espera"
+                rele = "ligado" if placa.rele_fechado else "desligado"
+                print(f"[placa] {conversao} @ {placa.baud} bps · relé {rele}")
             if not prontos:
                 continue
             tecla = sys.stdin.readline().strip().lower()
-            if tecla == "d":
-                placa.disparar()
-                print("[placa] disparo da proteção — relé aberto")
+            if tecla == "b":
+                placa.pressionar_botao()
+                print("[placa] botão pressionado")
             elif tecla == "x":
                 placa.arrancar_cabo()
                 print("[placa] cabo arrancado")

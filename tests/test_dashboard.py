@@ -158,6 +158,7 @@ def test_intervalo_invertido_avisa(app, ambiente, monkeypatch):
 
 def _conectar(app, aplicacao, serial_memoria):
     placa = serial_memoria().iniciar()
+    placa.rele_fechado = True  # carga ligada antes da conexão
     aplicacao._config = Configuracao(taxa_amostragem_ms=100)
     aplicacao.conectar_serial(ParametrosConexao(placa.caminho, 115200, 500))
     assert esperar(app, lambda: aplicacao.estado_disjuntor is EstadoDisjuntor.FECHADO)

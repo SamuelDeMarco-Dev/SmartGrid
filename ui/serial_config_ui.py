@@ -171,7 +171,7 @@ class Ui_SerialConfig(object):
         self.editTimeout.setPlaceholderText(_translate("SerialConfig", "100 a 10000"))
         self.labelTaxaAmostragem.setText(_translate("SerialConfig", "Taxa de amostragem (ms)"))
         self.editTaxaAmostragem.setPlaceholderText(_translate("SerialConfig", "100 a 5000"))
-        self.editTaxaAmostragem.setToolTip(_translate("SerialConfig", "Período da telemetria pedido à placa no handshake"))
+        self.editTaxaAmostragem.setToolTip(_translate("SerialConfig", "Intervalo em que o desktop agrega as amostras da placa"))
         self.labelInicioSessao.setText(_translate("SerialConfig", "Início da sessão"))
         self.dateInicioSessao.setDisplayFormat(_translate("SerialConfig", "dd/MM/yyyy"))
         self.botaoConectar.setText(_translate("SerialConfig", "Conectar"))

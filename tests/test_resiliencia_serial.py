@@ -6,7 +6,7 @@ from time import monotonic
 import pytest
 from PyQt6 import sip
 from PyQt6.QtCore import QThread, QTimer, Qt
-from PyQt6.QtTest import QSignalSpy
+from PyQt6.QtTest import QSignalSpy, QTest
 from PyQt6.QtWidgets import QPushButton
 
 from models import protocolo
@@ -88,41 +88,49 @@ def test_checksum_invalido_e_descartado_sem_interromper_telemetria(
     placa = serial_simulada()
     worker, leituras = conectar(placa)
     perdas = QSignalSpy(worker.link_perdido)
+    _silenciar(placa)
     total = worker.pacotes_descartados
-    pacote = protocolo.telemetria(999, 999.9, 0.1, True)
-    corpo, checksum = pacote.rsplit(b"*", 1)
-    adulterado = corpo + (b"*00\n" if checksum != b"00\n" else b"*01\n")
+    adulterado = _adulterar(protocolo.amostra(1023, 5, False, False))
 
     placa.injetar(adulterado)
-    placa.injetar(protocolo.telemetria(1000, 987.6, 0.1, True))
-    aguardar_qt(lambda: any(args[0].tensao == 987.6 for args in leituras))
+    placa.injetar(protocolo.amostra(1000, 5, False, False))
+    aguardar_qt(lambda: any(_tensao(args, 1000) for args in leituras))
 
     assert worker.pacotes_descartados == total + 1
-    assert all(args[0].tensao != 999.9 for args in leituras)
+    assert not any(_tensao(args, 1023) for args in leituras)
     assert worker.isRunning() and len(perdas) == 0
 
 
-def test_sync_falho_reinicia_handshake_em_9600_e_negocia_velocidade_menor(
+def test_banner_no_meio_da_telemetria_e_ignorado_sem_descarte(
+    serial_simulada, conectar, aguardar_qt,
+):
+    placa = serial_simulada()
+    worker, leituras = conectar(placa)
+    total = worker.pacotes_descartados
+    quantidade = len(leituras)
+
+    for texto in protocolo.BANNER:
+        placa.injetar(protocolo.linha(texto))
+    aguardar_qt(lambda: len(leituras) >= quantidade + 3)
+
+    assert worker.pacotes_descartados == total
+
+
+def test_velocidade_sem_amostras_pausa_e_negocia_velocidade_menor_em_9600(
     serial_simulada, aguardar_qt,
 ):
-    placa = serial_simulada(falhar_sync_em=(115200,))
+    placa = serial_simulada(falhar_em=(115200,))
     worker = SerialWorker(placa.caminho, 115200, 100, timeout_ms=150)
     velocidades = QSignalSpy(worker.velocidade_negociada)
     leituras = QSignalSpy(worker.leitura_recebida)
     worker.start()
     try:
         aguardar_qt(lambda: len(leituras) > 0, segundos=8)
-        negociacao = []
-        for baud, pacote in placa.escritas.copy():
-            mensagem = protocolo.interpretar(pacote)
-            if mensagem.comando in (protocolo.Comando.HS, protocolo.Comando.SYNC):
-                negociacao.append((baud, mensagem.comando, mensagem.campos))
         assert list(velocidades) == [[38400]]
-        assert negociacao == [
-            (9600, protocolo.Comando.HS, ("115200", "100")),
-            (115200, protocolo.Comando.SYNC, ()),
-            (9600, protocolo.Comando.HS, ("38400", "100")),
-            (38400, protocolo.Comando.SYNC, ()),
+        assert placa.escritas[:3] == [
+            (9600, b"!S115200\n"),
+            (115200, b"!P\n"),
+            (9600, b"!S38400\n"),
         ]
     finally:
         worker.parar()
@@ -142,15 +150,17 @@ def test_ack_rele_valido_e_confirmado_sem_descarte(
     total = worker.pacotes_descartados
     caplog.clear()
 
-    # Sem RELE,1 automático na conexão. Exercita um comando explícito e
+    # Sem religamento automático na conexão. Exercita um comando explícito e
     # verifica que o ACK correto aguarda a confirmação pela telemetria.
     placa.silenciar_telemetria = True
     fechado = estado == "1"
     assert worker.enviar_rele(fechado)
     aguardar_qt(lambda: worker._pedido_rele is not None and worker._pedido_rele.ack)
     assert len(confirmacoes) == 0
-    placa.injetar(protocolo.telemetria(999, 987.6, 0.1, fechado))
-    aguardar_qt(lambda: any(args[0].tensao == 987.6 for args in leituras))
+    # A primeira amostra depois do ACK pode ser anterior à troca: é ignorada.
+    placa.injetar(protocolo.amostra(1, 5, not fechado, False))
+    placa.injetar(protocolo.amostra(1000, 5, fechado, False))
+    aguardar_qt(lambda: any(_tensao(args, 1000) for args in leituras))
     aguardar_qt(lambda: len(confirmacoes) == 1)
 
     destino = EstadoDisjuntor.FECHADO if fechado else EstadoDisjuntor.ABERTO
@@ -160,9 +170,17 @@ def test_ack_rele_valido_e_confirmado_sem_descarte(
     assert worker.isRunning() and len(perdas) == 0
 
 
-@pytest.mark.parametrize("campos", [(), ("2",), ("valor_invalido",), ("",), ("1", "extra")])
+@pytest.mark.parametrize(
+    "linha",
+    [
+        b">>> ACK: RELE <<<\r\n",
+        b">>> ACK: RELE 2 <<<\r\n",
+        b">>> ACK: RELE LIGADO\r\n",
+        b">>> ACK: RELE LIGADO EXTRA <<<\r\n",
+    ],
+)
 def test_ack_rele_invalido_e_contabilizado_sem_perder_link(
-    serial_simulada, conectar, aguardar_qt, caplog, campos,
+    serial_simulada, conectar, aguardar_qt, caplog, linha,
 ):
     placa = serial_simulada()
     caplog.set_level(logging.INFO, logger="smartgrid")
@@ -171,13 +189,14 @@ def test_ack_rele_invalido_e_contabilizado_sem_perder_link(
     confirmacoes = QSignalSpy(worker.rele_confirmado)
     total = worker.pacotes_descartados
     caplog.clear()
-    placa.injetar(protocolo.ack("RELE", *campos))
-    placa.injetar(protocolo.telemetria(999, 987.6, 0.1, True))
+    _silenciar(placa)
+    placa.injetar(linha)
+    placa.injetar(protocolo.amostra(1000, 5, False, False))
     aguardar_qt(lambda: worker.pacotes_descartados > total or len(perdas) != 0)
 
     assert len(perdas) == 0
     assert worker.pacotes_descartados == total + 1
-    aguardar_qt(lambda: any(args[0].tensao == 987.6 for args in leituras))
+    aguardar_qt(lambda: any(_tensao(args, 1000) for args in leituras))
     assert worker.isRunning()
     assert any(
         registro.levelno == logging.WARNING and "Pacote serial descartado" in registro.message
@@ -186,7 +205,7 @@ def test_ack_rele_invalido_e_contabilizado_sem_perder_link(
     assert len(confirmacoes) == 0
 
 
-def test_ack_rele_com_checksum_invalido_nao_e_confirmado(
+def test_amostra_com_checksum_invalido_nao_confirma_comando(
     serial_simulada, conectar, aguardar_qt, caplog,
 ):
     placa = serial_simulada()
@@ -194,14 +213,16 @@ def test_ack_rele_com_checksum_invalido_nao_e_confirmado(
     worker, leituras = conectar(placa)
     perdas = QSignalSpy(worker.link_perdido)
     confirmacoes = QSignalSpy(worker.rele_confirmado)
+    _silenciar(placa)
+    placa.perder_rele = True
+    assert worker.enviar_rele(True)
+    aguardar_qt(lambda: "1" in placa.comandos_recebidos)
     total = worker.pacotes_descartados
     caplog.clear()
-    corpo, checksum = protocolo.ack("RELE", "0").rsplit(b"*", 1)
-    adulterado = corpo + (b"*00\n" if checksum != b"00\n" else b"*01\n")
 
-    placa.injetar(adulterado)
-    placa.injetar(protocolo.telemetria(999, 987.6, 0.1, True))
-    aguardar_qt(lambda: any(args[0].tensao == 987.6 for args in leituras))
+    placa.injetar(_adulterar(protocolo.amostra(1023, 5, True, False)))
+    placa.injetar(protocolo.amostra(1000, 5, False, False))
+    aguardar_qt(lambda: any(_tensao(args, 1000) for args in leituras))
 
     assert worker.pacotes_descartados == total + 1
     assert len(confirmacoes) == 0
@@ -210,3 +231,19 @@ def test_ack_rele_com_checksum_invalido_nao_e_confirmado(
         for registro in caplog.records
     )
     assert worker.isRunning() and len(perdas) == 0
+
+
+def _adulterar(pacote: bytes) -> bytes:
+    corpo, checksum = pacote.rsplit(b"*", 1)
+    return corpo + (b"*00\r\n" if not checksum.startswith(b"00") else b"*01\r\n")
+
+
+def _tensao(args, contagem: int) -> bool:
+    """A leitura publicada é a média da janela; procura a de uma só amostra."""
+    return args[0].tensao == pytest.approx(protocolo.converter(contagem, 0)[0])
+
+
+def _silenciar(placa) -> None:
+    """Para as amostras e deixa o worker publicar a janela em andamento."""
+    placa.silenciar_telemetria = True
+    QTest.qWait(250)

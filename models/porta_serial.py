@@ -20,7 +20,7 @@ from models.protocolo import INTERVALO_MAXIMO_MS, INTERVALO_MINIMO_MS, VELOCIDAD
 #: sempre começa em 9600 bps; o valor escolhido é a velocidade ALVO do handshake.
 BAUD_RATES = VELOCIDADES
 
-#: Faixa da taxa de amostragem (período da telemetria pedido no handshake).
+#: Faixa da taxa de amostragem (janela em que o desktop agrega as amostras).
 TAXA_AMOSTRAGEM_MINIMA_MS = INTERVALO_MINIMO_MS
 TAXA_AMOSTRAGEM_MAXIMA_MS = INTERVALO_MAXIMO_MS
 
@@ -166,7 +166,7 @@ class PortaSerial:
     # ------------------------------------------------------------------
     @staticmethod
     def validar_taxa_amostragem(taxa_ms: int) -> int:
-        """Confere o período da telemetria pedido à placa no handshake."""
+        """Confere o intervalo de agregação das amostras da placa."""
         if not TAXA_AMOSTRAGEM_MINIMA_MS <= taxa_ms <= TAXA_AMOSTRAGEM_MAXIMA_MS:
             raise ErroConexaoSerial(
                 f"Taxa de amostragem inválida: {taxa_ms} ms. "

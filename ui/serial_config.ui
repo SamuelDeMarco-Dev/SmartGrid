@@ -248,7 +248,7 @@
            <string>100 a 5000</string>
           </property>
           <property name="toolTip">
-           <string>Período da telemetria pedido à placa no handshake</string>
+           <string>Intervalo em que o desktop agrega as amostras da placa</string>
           </property>
          </widget>
         </item>

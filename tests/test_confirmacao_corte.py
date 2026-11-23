@@ -16,7 +16,6 @@ from models.config_manager import Configuracao
 from models.estado_disjuntor import EstadoDisjuntor
 from models.evento import TipoEvento
 from models.porta_serial import ParametrosConexao
-from models.protocolo import Comando
 from models.repositorio_dispositivos import RepositorioDispositivos
 from models.repositorio_eventos import RepositorioEventos
 from models.repositorio_regras import RepositorioRegras
@@ -42,7 +41,13 @@ def esperar(app, condicao, prazo=3.0):
 
 
 def comandos_rele(placa):
-    return [m.campos for m in placa.pacotes_recebidos if m.comando is Comando.RELE]
+    return [c for c in placa.comandos_recebidos if c in ("0", "1")]
+
+
+def amostra_bruta(*campos) -> bytes:
+    """Linha ``DAT`` com checksum válido, mas campos arbitrários."""
+    corpo = ",".join(["DAT", *map(str, campos)])
+    return protocolo.linha(f"${corpo}*{protocolo.checksum(corpo)}")
 
 
 @pytest.fixture
@@ -104,7 +109,7 @@ def test_comando_perdido_detecta_estado_inalterado_e_timeout(app, worker_conecta
     total = len(sinais.reportados)
     assert esperar(app, lambda: len(sinais.reportados) >= total + 3)
     assert len(sinais.falhas) == 1
-    assert comandos_rele(placa) == [("1" if destino.energizado else "0",)]
+    assert comandos_rele(placa) == ["1" if destino.energizado else "0"]
 
 
 @pytest.mark.parametrize("destino", [ABERTO, FECHADO])
@@ -125,8 +130,8 @@ def test_ack_incorreto_ou_malformado_nao_confirma(app, worker_conectado):
     placa.ack_incorreto = True
     worker.enviar_rele(False)
     assert esperar(app, lambda: comandos_rele(placa))
-    placa._enviar(protocolo.ack("RELE"))
-    placa._enviar(protocolo.ack("RELE", "0", "extra"))
+    placa._enviar(protocolo.linha(">>> ACK: RELE <<<"))
+    placa._enviar(protocolo.linha(">>> ACK: RELE DESLIGADO EXTRA <<<"))
 
     assert esperar(app, lambda: sinais.falhas)
     assert "esgotado" in sinais.falhas[0][1]
@@ -168,7 +173,7 @@ def test_worker_recusa_comandos_repetidos_e_contraditorios(app, worker_conectado
     assert not worker.enviar_rele(False)
     assert not worker.enviar_rele(True)
     assert esperar(app, lambda: sinais.falhas)
-    assert comandos_rele(placa) == [("0",)]
+    assert comandos_rele(placa) == ["0"]
 
     placa.perder_rele = False
     assert worker.enviar_rele(False)
@@ -183,7 +188,7 @@ def test_telemetrias_iguais_confirmam_comandos_sucessivos_sem_ack(app, worker_co
         assert esperar(app, lambda: len(sinais.confirmados) == total)
     assert sinais.confirmados == [FECHADO, FECHADO]
     assert sinais.falhas == []
-    assert comandos_rele(placa) == [("1",), ("1",)]
+    assert comandos_rele(placa) == ["1", "1"]
 
 
 @pytest.fixture
@@ -327,20 +332,23 @@ def test_reconexao_com_intencao_aberta_tenta_corte_uma_vez(app, cenario):
     placa = c.conectar(True)
     assert esperar(app, lambda: c.aplicacao.situacao_disjuntor.confirmacao is CONFIRMADO)
     assert c.dashboard.estado_disjuntor is ABERTO
-    assert comandos_rele(placa) == [("0",)]
+    assert comandos_rele(placa) == ["0"]
 
 
 def test_reconexao_com_placa_aberta_nao_religa_sem_operador(app, cenario):
     c = cenario(FECHADO)
     c.aplicacao.desconectar_serial()
     assert esperar(app, lambda: not c.aplicacao.serial_ativa)
-    placa = c.conectar(False)
+    placa = c.conectar(False)  # o firmware liga com o relé desligado
 
-    assert esperar(app, lambda: c.avisos)
+    assert esperar(app, lambda: RepositorioDispositivos().obter_por_tag("DISJ-01")["status"] == "ABERTO")
     assert c.dashboard.estado_disjuntor is ABERTO
-    assert RepositorioDispositivos().obter_por_tag("DISJ-01")["status"] == "ABERTO"
+    assert c.aplicacao.situacao_disjuntor.confirmacao is CONFIRMADO
     assert comandos_rele(placa) == []
     assert not esperar(app, lambda: placa.rele_fechado, prazo=0.3)
+    # Estado de boot: registrado como status, sem aviso de proteção atuada.
+    assert c.avisos == []
+    assert any("iniciou com o relé desligado" in e.descricao for e in RepositorioEventos().listar_todos())
 
 
 def test_reconciliacao_perdida_mantem_fechado_e_nao_repete_corte(app, cenario):
@@ -353,7 +361,7 @@ def test_reconciliacao_perdida_mantem_fechado_e_nao_repete_corte(app, cenario):
     assert c.dashboard.estado_disjuntor is FECHADO
     assert "FECHADO / FALHA" in c.dashboard.view.labelBadgeDisjuntor.text()
     assert not esperar(app, lambda: len(comandos_rele(placa)) > 1, prazo=0.4)
-    assert comandos_rele(placa) == [("0",)]
+    assert comandos_rele(placa) == ["0"]
     assert len(c.erros) == 1
 
 
@@ -372,20 +380,27 @@ def test_telemetria_contraditoria_posterior_retira_confirmacao_anterior(app, cen
     assert not esperar(app, lambda: len(comandos_rele(c.placa)) > 1, prazo=0.3)
 
 
-def test_d2_exige_religamento_manual_e_nao_duplica_eventos(app, cenario):
+def test_botao_da_placa_comanda_corte_e_exige_religamento_manual(app, cenario):
     c = cenario()
-    c.placa.disparar()
+    c.placa.pressionar_botao()
 
     assert esperar(app, lambda: c.avisos)
     assert c.dashboard.estado_disjuntor is ABERTO
+    assert c.aplicacao.situacao_disjuntor.confirmacao is CONFIRMADO
     assert not esperar(app, lambda: len(c.avisos) > 1, prazo=0.3)
-    assert comandos_rele(c.placa) == []
+    assert comandos_rele(c.placa) == ["0"]
     eventos = RepositorioEventos().listar_todos()
-    assert sum("espontaneamente" in e.descricao for e in eventos) == 1
+    assert sum("Botão de proteção" in e.descricao for e in eventos) == 1
+
+    c.placa.pressionar_botao()  # já aberto: registra, mas não comanda de novo
+    assert esperar(app, lambda: sum(
+        "Botão de proteção" in e.descricao for e in RepositorioEventos().listar_todos()
+    ) == 2)
+    assert comandos_rele(c.placa) == ["0"]
 
     c.dashboard.alternar_carga()
     assert esperar(app, lambda: c.dashboard.estado_disjuntor is FECHADO)
-    assert comandos_rele(c.placa) == [("1",)]
+    assert comandos_rele(c.placa) == ["0", "1"]
 
 
 def test_confirmacoes_sucessivas_geram_um_evento_por_operacao(app, cenario):
@@ -456,8 +471,8 @@ def test_amostra_invalida_nao_confirma_nem_mantem_link_vivo(app, worker_conectad
     placa.silenciar_telemetria = True
     worker.enviar_rele(False)
     assert esperar(app, lambda: comandos_rele(placa))
-    placa._enviar(protocolo.montar(Comando.TLM, 100, 220, 1, 9))
-    placa._enviar(protocolo.montar(Comando.TLM, 101, -1, 1, 0))
+    placa._enviar(amostra_bruta(900, 100, 1, 9))
+    placa._enviar(amostra_bruta(-1, 100, 0, 0))
 
     assert esperar(app, lambda: sinais.quedas)
     assert sinais.confirmados == []

@@ -7,15 +7,17 @@ from PyQt6.QtCore import QThread
 from serial import SerialException
 
 from models import protocolo
-from models.protocolo import Comando, ErroProtocolo
-from tools.simulador_placa import TELEMETRIA, PlacaVirtual
+from models.protocolo import ErroProtocolo, Resposta, TipoResposta
+from tools.simulador_placa import PlacaVirtual
+
+ACKS_RELE = (TipoResposta.RELE_LIGADO, TipoResposta.RELE_DESLIGADO)
 
 
 class PlacaEmMemoria(PlacaVirtual):
     """Usa a máquina de estados da placa virtual sobre um buffer com timeout."""
 
     def __init__(self, caminho: str, **opcoes):
-        super().__init__(-1, caminho, **opcoes)
+        # ``reiniciar()`` já envia o banner: o buffer precisa existir antes.
         self.condicao = Condition()
         self.respostas = bytearray()
         self.cabo_conectado = True
@@ -27,6 +29,7 @@ class PlacaEmMemoria(PlacaVirtual):
         self.ack_sem_atuar = False
         self.ack_incorreto = False
         self.silenciar_telemetria = False
+        super().__init__(-1, caminho, **opcoes)
 
     def iniciar(self):
         # Este transporte é temporizado pelos reads/writes, sem thread de pty.
@@ -43,30 +46,28 @@ class PlacaEmMemoria(PlacaVirtual):
                 try:
                     mensagem = protocolo.interpretar(pacote)
                 except ErroProtocolo:
-                    pass  # A injeção de bytes corrompidos deve chegar ao worker.
-                else:
-                    if protocolo.e_ack(mensagem, "RELE") and len(mensagem.campos) == 2:
-                        if self.omitir_ack:
-                            return
-                        pacote = protocolo.ack("RELE", "0" if mensagem.campos[1] == "1" else "1")
+                    mensagem = None  # A injeção de bytes corrompidos deve chegar ao worker.
+                if isinstance(mensagem, Resposta) and mensagem.tipo in ACKS_RELE:
+                    if self.omitir_ack:
+                        return
+                    pacote = protocolo.resposta_rele(mensagem.tipo is TipoResposta.RELE_DESLIGADO)
             self.respostas.extend(pacote)
             self.condicao.notify_all()
 
-    def _tratar(self, mensagem, agora):
-        if (
-            self.estado == TELEMETRIA and mensagem.comando is Comando.RELE
-            and mensagem.campos in (("0",), ("1",))
-        ):
+    def _processar(self, cmd: str) -> None:
+        if self.conversao_habilitada and cmd in ("0", "1"):
             if self.perder_rele:
+                self.comandos_recebidos.append(cmd)
                 return
             if self.ack_sem_atuar:
-                self._enviar(protocolo.ack("RELE", *mensagem.campos))
+                self.comandos_recebidos.append(cmd)
+                self._enviar(protocolo.resposta_rele(cmd == "1"))
                 return
-        super()._tratar(mensagem, agora)
+        super()._processar(cmd)
 
-    def _enviar_telemetria(self):
+    def _enviar_amostra(self):
         if not self.silenciar_telemetria:
-            super()._enviar_telemetria()
+            super()._enviar_amostra()
 
     def injetar(self, pacote: bytes) -> None:
         with self.condicao:
@@ -125,7 +126,11 @@ class PortaEmMemoria:
             self._verificar_link()
             self.placa._temporizar(monotonic())
             if not self.placa.respostas:
-                self.placa.condicao.wait(self.timeout)
+                espera = self.timeout
+                if self.placa.conversao_habilitada:
+                    # Acorda a tempo da próxima amostra do Timer1 simulado.
+                    espera = min(espera, max(0.0, self.placa._proxima_amostra - monotonic()))
+                self.placa.condicao.wait(espera)
                 self._verificar_link()
                 self.placa._temporizar(monotonic())
             dados = bytes(self.placa.respostas[:tamanho])

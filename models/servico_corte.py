@@ -80,20 +80,31 @@ class ServicoCorteEmergencial:
         barramento.estado_disjuntor_alterado.emit(destino)
         return evento
 
-    def registrar_disparo_espontaneo(self, valor_medido: str = "", *, simulado: bool = False) -> Evento:
+    def registrar_disparo_espontaneo(
+        self, valor_medido: str = "", *, simulado: bool = False, inicial: bool = False
+    ) -> Evento:
         """Grava a abertura do disjuntor pelo hardware e o alerta correspondente.
 
         Diferente do corte, aqui o estado físico JÁ mudou: o serviço apenas
         alinha o banco à realidade, atomicamente. Não emite
         ``estado_disjuntor_alterado``, pois não é uma solicitação de comando.
+        ``inicial``: a placa acabou de ligar com o relé desligado (estado de
+        boot do firmware), registrado como status e não como alerta.
         Levanta ``sqlite3.Error``/``LookupError`` se a gravação falhar.
         """
-        evento = Evento.agora(
-            TipoEvento.ALERTA,
-            "Disparo simulado — intenção de abertura registrada sem confirmação serial"
-            if simulado else "Disjuntor abriu espontaneamente — proteção atuada no hardware",
-            valor_medido,
-        )
+        if inicial:
+            evento = Evento.agora(
+                TipoEvento.STATUS,
+                "Placa iniciou com o relé desligado — religamento exige ação manual",
+                valor_medido,
+            )
+        else:
+            evento = Evento.agora(
+                TipoEvento.ALERTA,
+                "Disparo simulado — intenção de abertura registrada sem confirmação serial"
+                if simulado else "Disjuntor abriu espontaneamente — proteção atuada no hardware",
+                valor_medido,
+            )
 
         with Database.transacao() as conn:
             self._repo_dispositivos.atualizar_status(

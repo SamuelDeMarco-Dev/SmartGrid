@@ -7,9 +7,8 @@ import pytest
 
 from models.estado_disjuntor import EstadoDisjuntor
 from models.estado_link import EstadoLink
-from models.protocolo import Comando
 from models.serial_worker import SerialWorker
-from tools.simulador_placa import AGUARDANDO_LINK, TELEMETRIA, PlacaVirtual
+from tools.simulador_placa import PlacaVirtual
 
 
 def esperar(app, condicao, prazo=5.0):
@@ -32,18 +31,24 @@ class Coletor:
         self.disjuntor: list[EstadoDisjuntor] = []
         self.velocidades: list[int] = []
         self.quedas: list[str] = []
+        self.botoes = 0
         worker.estado_alterado.connect(lambda nome, _d: self.estados.append(nome))
         worker.leitura_recebida.connect(self.leituras.append)
         worker.disjuntor_reportado.connect(self.disjuntor.append)
         worker.velocidade_negociada.connect(self.velocidades.append)
         worker.link_perdido.connect(self.quedas.append)
+        worker.botao_acionado.connect(self._ao_botao)
+
+    def _ao_botao(self) -> None:
+        self.botoes += 1
 
 
 @pytest.fixture
 def placa():
     if os.name != "posix":
         pytest.skip("Integração com pseudoterminal real requer POSIX (os.openpty e tty).")
-    placa = PlacaVirtual.criar(tempo_sync_s=0.3).iniciar()
+    placa = PlacaVirtual.criar().iniciar()
+    placa.rele_fechado = True  # carga ligada antes da conexão
     yield placa
     placa.parar()
 
@@ -68,22 +73,23 @@ def test_handshake_negocia_e_recebe_telemetria(app, placa):
         assert coletor.velocidades == [38400]
         assert coletor.estados[:4] == ["ABRINDO_PORTA", "HANDSHAKE", "NEGOCIANDO", "TELEMETRIA"]
         assert coletor.disjuntor == [EstadoDisjuntor.FECHADO] * len(coletor.leituras)
-        # O primeiro pacote enviado pelo desktop é o handshake.
-        assert placa.pacotes_recebidos[0].comando is Comando.HS
+        # O primeiro comando enviado pelo desktop é o início na velocidade alvo.
+        assert placa.comandos_recebidos[0] == "S38400"
     finally:
         _encerrar(app, worker)
 
 
-def test_parar_envia_bye_e_libera_a_porta(app, placa):
+def test_parar_envia_pausa_e_libera_a_porta(app, placa):
     worker, coletor = _worker(placa)
     worker.start()
-    assert esperar(app, lambda: placa.estado == TELEMETRIA)
+    assert esperar(app, lambda: placa.conversao_habilitada)
 
     _encerrar(app, worker)
 
     assert worker.isFinished()
     assert coletor.estados[-1] == EstadoLink.DESCONECTADO.name
-    assert esperar(app, lambda: placa.estado == AGUARDANDO_LINK)
+    assert esperar(app, lambda: not placa.conversao_habilitada and placa.baud == 9600)
+    assert placa.comandos_recebidos[-1] == "P"
     assert coletor.quedas == []
 
 
@@ -91,7 +97,7 @@ def test_comando_de_rele_chega_na_placa(app, placa):
     worker, coletor = _worker(placa)
     worker.start()
     try:
-        assert esperar(app, lambda: placa.estado == TELEMETRIA)
+        assert esperar(app, lambda: placa.conversao_habilitada)
         worker.enviar_rele(False)
         assert esperar(app, lambda: EstadoDisjuntor.ABERTO in coletor.disjuntor)
         assert placa.rele_fechado is False
@@ -99,25 +105,29 @@ def test_comando_de_rele_chega_na_placa(app, placa):
         _encerrar(app, worker)
 
 
-def test_disparo_na_placa_e_reportado(app, placa):
+def test_botao_da_placa_emite_um_acionamento_sem_atuar_no_rele(app, placa):
     worker, coletor = _worker(placa)
     worker.start()
     try:
-        assert esperar(app, lambda: coletor.disjuntor)
-        placa.disparar()
-        assert esperar(app, lambda: coletor.disjuntor[-1] is EstadoDisjuntor.ABERTO)
+        assert esperar(app, lambda: len(coletor.leituras) >= 2)
+        placa.pressionar_botao()
+        assert esperar(app, lambda: coletor.botoes == 1)
+        assert not esperar(app, lambda: coletor.botoes > 1, prazo=0.5)
+        # O firmware só reporta o botão; o relé segue ligado.
+        assert coletor.disjuntor[-1] is EstadoDisjuntor.FECHADO
     finally:
         _encerrar(app, worker)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Pseudoterminal real requer POSIX (os.openpty e tty).")
-def test_sync_falho_cai_para_a_velocidade_menor(app):
-    placa = PlacaVirtual.criar(tempo_sync_s=0.3, falhar_sync_em=(115200,)).iniciar()
+def test_sem_amostras_cai_para_a_velocidade_menor(app):
+    placa = PlacaVirtual.criar(falhar_em=(115200,)).iniciar()
     worker, coletor = _worker(placa, baud=115200)
     worker.start()
     try:
         assert esperar(app, lambda: coletor.velocidades, prazo=8)
         assert coletor.velocidades == [38400]
+        assert placa.comandos_recebidos[:3] == ["S115200", "P", "S38400"]
     finally:
         _encerrar(app, worker)
         placa.parar()

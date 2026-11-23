@@ -1,7 +1,7 @@
 # Bancada SmartGrid — entrega A1/5, issue #66
 
 Responsável: Arthur De Marco Faggion. Revisão de software: 19/11/2026.
-Base: `main` em `b01860e`; firmware em `firmware/smartgrid_placa/smartgrid_placa.ino`.
+Firmware: o fornecido pelo professor, versionado sem alterações em `firmware/smartgrid_placa/smartgrid_placa.ino`. O desktop foi adaptado ao protocolo dele (`models/protocolo.py`).
 Este documento prepara a montagem e o ensaio. **Nenhum teste com Arduino real foi executado nesta entrega de software.**
 
 ## Materiais
@@ -11,9 +11,10 @@ Este documento prepara a montagem e o ensaio. **Nenhum teste com Arduino real fo
 | 1 | Arduino UNO R3 / compatível com ATmega328P, 5 V | Alvo de compilação `arduino:avr:uno`; conferir a placa disponível |
 | 1 | Cabo USB de dados compatível com a placa | Separar um cabo reserva; cabo somente de carga não serve |
 | 2 | Potenciômetros lineares de 10 kΩ | Simulam tensão e corrente, sem sensores ligados a uma instalação |
-| 1 | LED e resistor de 330 Ω | Opção mais simples para representar a carga em D7 |
+| 1 | LED e resistor de 330 Ω | Opção mais simples para representar a carga em D12 |
 | opcional | Módulo de relé com entrada compatível com lógica de 5 V | Substitui o LED; identificar polaridade de acionamento e consumo |
-| 1 | Botão momentâneo normalmente aberto | Entre D2 e GND |
+| 1 | Botão momentâneo normalmente aberto | Entre 5 V e D11 |
+| 1 | Resistor de 10 kΩ | Pull-down do botão, de D11 ao GND |
 | 1 | Protoboard e conjunto de jumpers | Conferir continuidade das barras de alimentação |
 | 1 | Computador com Arduino IDE e ambiente Python do projeto | Deixar dependências instaladas antes da apresentação |
 | opcional | Multímetro | Conferência dos 0–5 V dos potenciômetros; não mede os valores simulados de 250 V/20 A |
@@ -28,9 +29,9 @@ Monte com o USB desconectado. Use exclusivamente os 5 V do USB para a versão co
 |---|---|---|
 | Potenciômetro de tensão | A0 | Cursor no A0; extremos em 5 V e GND |
 | Potenciômetro de corrente | A1 | Cursor no A1; extremos em 5 V e GND |
-| Botão de disparo | D2 | Um contato no D2 e o outro no GND; `INPUT_PULLUP` |
-| LED ou entrada do módulo de relé | D7 | LED: D7 → resistor 330 Ω → ânodo; cátodo no GND |
-| LED de diagnóstico | D13 / `LED_BUILTIN` | LED já existente no UNO; não exige montagem adicional |
+| Botão de proteção | D11 | Um contato em 5 V e o outro no D11; resistor de 10 kΩ do D11 ao GND (`INPUT`, pressionado = `HIGH`) |
+| LED ou entrada do módulo de relé | D12 | Ativo em LOW (`RELE_ACTIVE_LOW = true`). LED: 5 V → resistor 330 Ω → ânodo; cátodo no D12 |
+| Saída para o osciloscópio | D13 | Alterna a cada amostra (onda quadrada de 100 Hz) enquanto a conversão está ligada; o LED integrado acompanha |
 | Referência comum | GND | Mesma barra de GND para UNO, potenciômetros, botão e circuito de indicação |
 
 ```mermaid
@@ -42,64 +43,65 @@ flowchart LR
     P2 -->|Cursor| A1[A1]
     P1 -->|Outro extremo| GND[GND compartilhado]
     P2 -->|Outro extremo| GND
-    D2[D2 com INPUT_PULLUP] --> BTN[Botão normalmente aberto]
-    BTN --> GND
-    D7[D7] --> R[Resistor 330 ohms]
-    R --> LED[Ânodo LED / cátodo em GND]
-    LED --> GND
-    UNO --- DIAG[D13: LED integrado]
+    V5 --> BTN[Botão normalmente aberto]
+    BTN --> D11[D11 com INPUT]
+    D11 --> RPD[Pull-down 10 kΩ]
+    RPD --> GND
+    V5 --> R[Resistor 330 ohms]
+    R --> LED[Ânodo LED / cátodo em D12]
+    LED --> D12[D12, ativo em LOW]
+    UNO --- DIAG[D13: osciloscópio e LED integrado]
 ```
 
 - As entradas A0/A1 devem permanecer entre GND e 5 V. Não deixar o cursor flutuando. Girar os potenciômetros altera o ADC, não aplica tensão de rede ao UNO.
-- No botão de quatro terminais, os dois pinos do mesmo contato já podem estar unidos. Identificar os contatos opostos antes de ligar; pressionar deve unir D2 ao GND.
-- Com `INPUT_PULLUP`, solto = `HIGH` e pressionado = `LOW`. O resistor interno mantém a entrada definida; não se adiciona um resistor de pull-down nesta montagem. A ligação segue o [exemplo oficial InputPullupSerial](https://docs.arduino.cc/built-in-examples/digital/InputPullupSerial?queryID=24603a7d2a6b6b4669ef9e3e501e9d92).
-- Não ligar uma bobina de relé diretamente ao D7. Se usar módulo, conectar D7 à entrada `IN`, GND à referência e alimentar o módulo conforme sua especificação, com estágio de acionamento/proteção próprio. Um módulo que exceda a alimentação disponível exige fonte adequada; conferir o esquema do fabricante antes de compartilhar alimentação. Manter os contatos de potência sem carga ou com carga de baixa tensão isolada.
-- O padrão `RELE_ATIVO_EM_LOW = false` serve ao LED: `HIGH` representa carga fechada. Se o módulo for ativo em LOW, alterar somente essa constante para `true`, recompilar e validar os dois estados antes da demonstração.
+- O D11 usa `INPUT` sem pull-up interno: **o pull-down de 10 kΩ é obrigatório**. Sem ele a entrada flutua e o desktop pode receber acionamentos falsos do botão.
+- No botão de quatro terminais, os dois pinos do mesmo contato já podem estar unidos. Identificar os contatos opostos antes de ligar; pressionar deve unir D11 ao 5 V.
+- O relé é ativo em LOW: `LOW` em D12 = relé ligado (carga energizada). Por isso o LED vai do 5 V ao D12 e acende quando o pino vai a `LOW`. Módulos de relé comuns já são ativos em LOW: conectar D12 à entrada `IN`, GND à referência e alimentar o módulo conforme sua especificação. Não ligar uma bobina de relé diretamente ao D12. Manter os contatos de potência sem carga ou com carga de baixa tensão isolada.
 
 ## O que o firmware faz
 
-| Item | Comportamento atual |
+| Item | Comportamento |
 |---|---|
-| Inicialização | `MODO_RMS = 0`, serial a **9600 bps**, estado `AGUARDANDO_LINK`, sem telemetria |
-| Velocidades | Exatamente **9600, 19200, 38400 e 115200 bps**; não inclui 57600 |
-| Handshake | Recebe `HS,<baud>,<intervalo_ms>` a 9600; responde `ACK,HS,...` na velocidade antiga; depois troca |
-| Sincronização | Aguarda `SYNC` na velocidade escolhida por até 2000 ms; responde `ACK,SYNC` e inicia a telemetria |
-| Telemetria | `TLM,<seq>,<tensao>,<corrente>,<disjuntor>` a cada 100–5000 ms; padrão solicitado pelo app: 1000 ms |
-| Comandos | `RELE,0` abre; `RELE,1` fecha; responde `ACK,RELE,0|1`; `BYE` volta à espera em 9600 |
-| Proteção local | Botão em LOW abre a carga; guarda simples de 50 ms; mantê-lo pressionado pode provocar nova abertura após um religamento |
-| Valores com carga aberta | Corrente reportada = zero; tensão continua sendo lida; potência é calculada no desktop por `V × I` |
-| Diagnóstico | D13 pisca a cada aproximadamente 500 ms na espera; fica aceso em telemetria |
-| Watchdog do link | Mais de 5000 ms sem mensagem do host volta à espera a 9600; é temporização por software, não o watchdog de reset do AVR |
+| Inicialização | Serial a **9600 bps**, relé **desligado**, conversão parada; imprime um banner de texto |
+| Velocidades | Exatamente **9600, 19200, 38400 e 115200 bps** |
+| Início | `!S<baud>`: responde `>>> ACK: INICIANDO EM <baud> BPS <<<` na velocidade antiga, troca e liga a conversão; baud fora da lista → `>>> ERR: BAUD INVALIDO... <<<` |
+| Amostragem | Timer1 a **200 Hz** (`OCR1A = 1249`, prescaler 64): lê A0, A1, relé e botão e envia `$DAT,<A0>,<A1>,<rele>,<botao>*CS` |
+| Comandos do relé | `!1`/`!L` liga, `!0`/`!D` desliga, `!T` alterna; resposta `>>> ACK: RELE ... <<<` |
+| Pausa | `!P`/`!STOP`: para a conversão e volta a 9600 bps |
+| Botão | Só é reportado no campo `botao`; **não atua no relé** |
+| Diagnóstico | D13 alterna a cada amostra (100 Hz) durante a conversão; nível baixo em espera |
+| Watchdog | Não existe: sem `!P`, a placa continua transmitindo até ser reiniciada |
 
-O desktop envia `PING` a cada 1 s. Ao perder pacotes, o limite de silêncio do desktop é `3 × intervalo de telemetria + timeout configurado` (4 s com os padrões), salvo erro de porta detectado antes disso. Após falha de `SYNC`, tenta velocidades menores: 115200 → 38400 → 19200 → 9600. Ao abrir a porta, o UNO pode reiniciar pelo DTR; o primeiro handshake permite até 6 s para o boot.
+O que fica no desktop (`SerialWorker`):
 
-**Estado da carga:** `setup()` chama `aplicarRele(true)`. Ao conectar, o aplicativo realinha a placa ao estado persistido do disjuntor. O watchdog de comunicação e `BYE` preservam o estado do relé; não implementam abertura automática por perda de link. Desconectar USB na montagem alimentada só por USB desliga a placa e o LED, portanto não comprova o watchdog da placa. Esses comportamentos devem ser explicados na banca; a bancada representa uma carga didática.
+- repete `!S<baud>` a 9600 até o ACK (até 6 s, cobrindo o boot do UNO após o DTR) e confirma a velocidade pela primeira amostra válida em até 1 s. Se não chegar nada, envia `!P` e tenta a velocidade menor: 115200 → 38400 → 19200 → 9600;
+- converte as contagens em V e A e publica **uma leitura por intervalo** (`taxa_amostragem_ms`), com a média das amostras da janela. Com o relé desligado, a corrente publicada é zero;
+- transforma a borda de subida do botão (debounce de 50 ms) em corte: grava a intenção, envia `!0` e só confirma pela telemetria;
+- declara **Link perdido** após `3 × intervalo + timeout` sem amostras (4 s com os padrões) e envia `!P` ao desconectar.
 
-Na revisão desta issue, a leitura de `agora = millis()` foi movida para depois de `lerSerial()` e `verificarBotao()`. A serial pode renovar `ultimoHost` durante o ciclo; usar um instante anterior causava subtração sem sinal com resultado muito grande e um timeout falso. Os pinos, os pacotes e as constantes de calibração foram preservados.
+**Taxa de transmissão:** cada linha `DAT` tem até ~24 bytes. A 9600 bps cabem cerca de 40 linhas por segundo, então a placa perde amostras (o `Serial.print` bloqueia e o Timer1 sobrescreve as leituras). Funciona, mas 38400 ou 115200 são as velocidades adequadas para os 200 Hz.
+
+**Estado da carga:** `setup()` chama `acionarRele(false)` e o UNO reinicia a cada abertura da porta. Ao conectar, o desktop vê a carga **ABERTO**, registra "Placa iniciou com o relé desligado" no Histórico (status, sem aviso de proteção) e **não religa sozinho**; o operador usa **Religar carga** no Dashboard. Se o banco tinha intenção ABERTO, o estado é confirmado direto.
 
 ## Calibração e escala
 
-Os valores atuais são os existentes no firmware, **não resultados de calibração experimental**:
+O firmware do professor envia contagens brutas do ADC. A escala fica no desktop, em `models/protocolo.py`; os valores **não são resultados de calibração experimental**:
 
 | Constante | Valor atual | Uso |
 |---|---|---|
-| `MODO_RMS` | `0` | Demonstração com potenciômetros |
 | `TENSAO_FUNDO_ESCALA` | `250.0` | Escala simulada em V para ADC = 1023 |
 | `CORRENTE_FUNDO_ESCALA` | `20.0` | Escala simulada em A para ADC = 1023 |
-| `FATOR_TENSAO_RMS` | `0.55` | Conversão de contagens RMS; valor inicial a validar antes de usar sensores |
-| `SENSIBILIDADE_ACS712` | `0.185` V/A | Valor declarado para a variante de 5 A; conferir o modelo efetivo |
-| `AMOSTRAS_RMS` | `160` | Amostragem sequencial; a janela não é sincronizada à fase da rede |
+| `ADC_MAXIMO` | `1023` | Maior contagem do ADC de 10 bits |
 
-Para os potenciômetros, a conversão é `ADC × fundo_de_escala / 1023`. Com aproximadamente 2,5 V no cursor, espera-se aproximadamente 125 V ou 10 A simulados (corrente somente com carga fechada). A tensão real medida no cursor continua sendo aproximadamente 2,5 V.
+Para os potenciômetros, a conversão é `ADC × fundo_de_escala / 1023`. Com aproximadamente 2,5 V no cursor, espera-se aproximadamente 125 V ou 10 A simulados (corrente somente com o relé ligado). A tensão real medida no cursor continua sendo aproximadamente 2,5 V. O firmware não calcula RMS: a leitura de sensores AC (ZMPT101B/ACS712) exigiria tratar as amostras no desktop.
 
 Procedimento pendente de bancada:
 
 1. Registrar placa, alimentação, versão do firmware, instrumento de referência e constantes iniciais.
-2. Em `MODO_RMS = 0`, conferir extremos e ponto central dos dois potenciômetros com multímetro. Registrar tensão do cursor, valor reportado e repetibilidade; verificar que A0/A1 nunca excedem a alimentação.
-3. Escolher e documentar a escala didática desejada. Manter 250 V e 20 A se não houver motivo para mudá-la. Ajustar fundo de escala muda a simulação, não calibra um sensor físico.
-4. O modo RMS é opcional e não faz parte desta montagem. Para avaliá-lo, usar somente uma fonte de teste de baixa tensão isolada e sensores compatíveis, com referência independente e montagem aprovada para esses componentes. Não conectar os sensores à rede elétrica neste roteiro.
-5. Com referência não nula e sinal estável, calcular a correção candidata `fator_novo = fator_atual × valor_referencia / valor_exibido`. Não aplicar se o ADC saturar, o valor for zero ou o ruído dominar. Conferir a sensibilidade declarada do ACS712 antes de alterar qualquer constante.
-6. Recompilar, gravar e repetir medições em pelo menos três pontos; registrar erro e dispersão antes/depois. Só então chamar os fatores de calibrados. Não preencher resultados sem medição.
+2. Conferir extremos e ponto central dos dois potenciômetros com multímetro. Registrar tensão do cursor, valor reportado e repetibilidade; verificar que A0/A1 nunca excedem a alimentação.
+3. Escolher e documentar a escala didática desejada. Manter 250 V e 20 A se não houver motivo para mudá-la. Ajustar fundo de escala (em `models/protocolo.py`) muda a simulação, não calibra um sensor físico.
+4. Com referência não nula e sinal estável, calcular a correção candidata `fundo_novo = fundo_atual × valor_referencia / valor_exibido`. Não aplicar se o ADC saturar, o valor for zero ou o ruído dominar.
+5. Reiniciar o app e repetir medições em pelo menos três pontos; registrar erro e dispersão antes/depois. Só então chamar as escalas de calibradas. Não preencher resultados sem medição. O firmware não precisa ser regravado.
 
 | Data / operador | Modo e canal | Referência | Valor antes | Constante antes/depois | Valor depois / erro | Evidência |
 |---|---|---|---|---|---|---|
@@ -112,13 +114,13 @@ No modelo resistivo da demonstração, `P = V × I`. A aplicação não mede fas
 1. Instalar a Arduino IDE para o sistema do computador a partir da [página oficial de software](https://www.arduino.cc/en/software). Instalar o pacote **Arduino AVR Boards** pelo gerenciador de placas, se necessário.
 2. Conectar o UNO por USB e selecionar **Arduino Uno** no seletor de placa ou em **Tools/Ferramentas → Board/Placa**.
 3. Selecionar a porta que aparece ao conectar a placa: por exemplo `COM3` no Windows, `/dev/ttyACM0` no Linux ou `/dev/cu.usbmodem...` no macOS. Confirmar a porta real, sem assumir esses exemplos.
-4. Abrir `firmware/smartgrid_placa/smartgrid_placa.ino`. Conferir `MODO_RMS = 0`, polaridade do relé e pinagem desta página.
+4. Abrir `firmware/smartgrid_placa/smartgrid_placa.ino`. Conferir `RELE_ACTIVE_LOW = true` e a pinagem desta página (A0, A1, D11, D12, D13).
 5. Usar **Verify/Verificar** para compilar. Corrigir erros antes de continuar; guardar saída e versão do pacote AVR.
 6. Fechar SmartGrid e qualquer monitor serial que ocupe a porta; usar **Upload/Carregar**. O procedimento de placa, porta e upload está no [guia oficial da IDE 2](https://docs.arduino.cc/software/ide-v2/tutorials/getting-started/ide-v2-uploading-a-sketch/).
 7. Fechar o monitor serial da IDE. Abrir o SmartGrid na raiz do projeto: Windows, `.\.venv\Scripts\python.exe main.py`; Linux/macOS, `.venv/bin/python main.py`. As dependências estão em `requirements.txt` e `requirements-dev.txt`.
-8. Em **Comunicação Serial**, atualizar as portas, selecionar a porta real, escolher uma das quatro velocidades e um timeout válido (padrão 1000 ms). O intervalo vem de `data/config.json`, campo `taxa_amostragem_ms` (padrão 1000). Editar esse campo com o app fechado, se necessário.
-9. Clicar **Conectar** e observar as fases: abertura → handshake a 9600 → negociação → telemetria. Escolher 115200 na tela não muda a velocidade inicial do handshake.
-10. No Dashboard, girar um potenciômetro por vez: tensão, corrente e potência devem variar; o gráfico deve receber pontos. Conferir D13 e o evento de conexão no Histórico. Não esperar texto espontâneo no monitor serial antes do handshake.
+8. Em **Comunicação Serial**, atualizar as portas, selecionar a porta real, escolher uma das quatro velocidades (de preferência 38400 ou 115200) e um timeout válido (padrão 1000 ms). A taxa de amostragem é o intervalo em que o desktop agrega as amostras de 200 Hz (padrão 1000 ms).
+9. Clicar **Conectar** e observar as fases: abertura → handshake a 9600 (`!S<baud>`) → negociação (primeira amostra) → telemetria. Escolher 115200 na tela não muda a velocidade inicial do handshake. A carga aparece ABERTO: religar pelo Dashboard.
+10. No Dashboard, girar um potenciômetro por vez: tensão, corrente e potência devem variar; o gráfico deve receber pontos. Conferir a onda de 100 Hz no D13 (osciloscópio) e o evento de conexão no Histórico. Pelo monitor serial da IDE, a placa mostra o banner e aceita `!S115200`, `!1`, `!0` e `!P` digitados à mão.
 
 Compilação opcional por CLI, sem upload:
 
@@ -137,20 +139,20 @@ A [documentação do processo de build](https://docs.arduino.cc/arduino-cli/sket
 | ID | Ensaio e ação | Critério observável | Status / evidência |
 |---|---|---|---|
 | F01 | Conferir montagem desenergizada e depois ligar USB | Sem curto; A0/A1 em 0–5 V; pinos e polaridade corretos | **Pendente** |
-| F02 | Verificar e gravar o firmware no UNO | IDE confirma upload; D13 pisca aguardando link | **Pendente** |
+| F02 | Verificar e gravar o firmware no UNO | IDE confirma upload; monitor serial a 9600 mostra o banner "PLACA EM ESPERA" | **Pendente** |
 | F03 | Conectar escolhendo 9600 bps | Handshake começa em 9600 e termina em telemetria a 9600 | **Pendente** |
 | F04 | Desconectar e conectar escolhendo 19200 bps | Handshake começa em 9600; negociação confirma 19200 | **Pendente** |
 | F05 | Repetir escolhendo 38400 bps | Handshake começa em 9600; negociação confirma 38400 | **Pendente** |
 | F06 | Repetir escolhendo 115200 bps | Handshake começa em 9600; negociação confirma 115200 | **Pendente** |
 | F07 | Girar somente o potenciômetro A0 | Indicador de tensão varia conforme a escala; corrente permanece aproximadamente estável | **Pendente** |
 | F08 | Girar somente o potenciômetro A1, carga fechada | Corrente e potência variam; tensão permanece aproximadamente estável | **Pendente** |
-| F09 | Observar pelo menos 30 s de telemetria | D13 aceso, indicadores e gráfico atualizando, navegação responde | **Pendente** |
-| F10 | Confirmar CORTE DE EMERGÊNCIA | D7/relé abre, badge ABERTO, corrente zero, evento persistido com dispositivo | **Pendente** |
-| F11 | Soltar botão e confirmar RELIGAR CARGA | D7/relé fecha, corrente retorna, novo evento persistido | **Pendente** |
-| F12 | Pressionar e soltar botão D2 | Abertura sem comando, aviso de proteção e evento de disparo; depois religar com confirmação | **Pendente** |
+| F09 | Observar pelo menos 30 s de telemetria | Onda de 100 Hz no D13, indicadores e gráfico atualizando, navegação responde | **Pendente** |
+| F10 | Confirmar CORTE DE EMERGÊNCIA | D12/relé desliga, badge ABERTO, corrente zero, evento persistido com dispositivo | **Pendente** |
+| F11 | Confirmar RELIGAR CARGA | D12/relé liga, corrente retorna, novo evento persistido | **Pendente** |
+| F12 | Com a carga ligada, pressionar e soltar o botão D11 | Evento "Botão de proteção acionado", o app envia `!0`, relé desliga, aviso de proteção; depois religar com confirmação | **Pendente** |
 | F13 | Remover USB durante telemetria | App sinaliza Link perdido, indicadores param, comandos indisponíveis e GUI permanece navegável | **Pendente** |
 | F14 | Recolocar USB, atualizar portas e reconectar manualmente | Novo handshake a 9600, telemetria retomada, estado alinhado ao banco | **Pendente** |
-| F15 | Cliente de ensaio mantém a porta aberta após SYNC e deixa de enviar mensagens por mais de 5 s | Placa alimentada volta à espera a 9600; D13 pisca; não confundir com placa desligada | **Pendente** |
+| F15 | Desconectar pelo app com telemetria ativa | App envia `!P`; a placa para a conversão, D13 fica em nível baixo e o monitor serial a 9600 volta a aceitar comandos | **Pendente** |
 | F16 | Filtrar Histórico e reiniciar o app | Eventos confirmados permanecem; filtros tipo/data/dispositivo corretos após integrar #63 | **Pendente** |
 | F17 | Fechar o app com telemetria ativa | Workers encerram, porta liberada, sem aviso de QThread destruída em execução | **Pendente** |
 
@@ -188,7 +190,7 @@ Copiar o caminho realmente impresso pelo simulador (`/dev/pts/N` em Linux, norma
 
 | Entrada | Efeito |
 |---|---|
-| `d` | Disparo virtual: abre o disjuntor; a próxima telemetria informa o estado |
+| `b` | Pressiona o botão virtual por 200 ms; o app comanda o corte (`!0`) |
 | `x` | Fecha o mestre da pty e termina o simulador; o app deve detectar Link perdido |
 | `q` ou Ctrl+C | Encerra o simulador |
 
@@ -197,12 +199,12 @@ Depois de `x`, executar o simulador novamente, copiar a nova porta e reconectar 
 Para demonstrar fallback, começar uma instância nova:
 
 ```bash
-.venv/bin/python tools/simulador_placa.py --falhar-sync 115200
+.venv/bin/python tools/simulador_placa.py --falhar-em 115200
 ```
 
-Escolher 115200 no app. O simulador ignora esse SYNC; depois dos prazos, a negociação deve concluir em 38400. A pty não impõe baud rate elétrico: isso valida a sequência lógica e os estados, não a qualidade do enlace do UNO a 115200.
+Escolher 115200 no app. O simulador aceita o `!S115200`, mas não envia amostras nessa velocidade; o desktop envia `!P` e a negociação deve concluir em 38400. A pty não impõe baud rate elétrico: isso valida a sequência lógica e os estados, não a qualidade do enlace do UNO a 115200.
 
-Recursos: handshake, SYNC, quatro velocidades lógicas, telemetria sintética variável, RELE/ACK, disparo `d`, BYE, watchdog de link e fechamento `x`. Limitações: não lê potenciômetros, não aciona LED/relé, não emula reset por DTR, ruído elétrico, conversor USB ou calibração; os valores são sintéticos e não há comando de console para fixar tensão/corrente. Não declarar os ensaios F01–F17 concluídos a partir do simulador.
+Recursos: banner do boot, `!S` nas quatro velocidades lógicas, amostras `DAT` sintéticas a 200 Hz, relé `!1`/`!0`/`!T` com ACK, botão `b`, `!P` e fechamento `x`. Limitações: não lê potenciômetros, não aciona LED/relé, não emula reset por DTR, ruído elétrico, conversor USB ou calibração; os valores são sintéticos e não há comando de console para fixar tensão/corrente. Não declarar os ensaios F01–F17 concluídos a partir do simulador.
 
 Testes automatizados existentes para preparar o Plano B, no Linux/macOS:
 
@@ -215,14 +217,14 @@ Não editar ou suprimir esses testes para simular aprovação no Windows.
 | ID | Ensaio virtual/manual | Status / evidência |
 |---|---|---|
 | V01 | App gráfico + simulador, handshake nas quatro opções e gráfico | **Pendente de execução em Linux/macOS ou WSLg** |
-| V02 | Corte, religamento e comando `d` | **Pendente** |
+| V02 | Religamento após conectar, corte e comando `b` | **Pendente** |
 | V03 | Comando `x`, GUI responsiva e reconexão com nova pty | **Pendente** |
-| V04 | `--falhar-sync 115200` resulta em 38400 | **Pendente** |
+| V04 | `--falhar-em 115200` resulta em 38400 | **Pendente** |
 | V05 | Ensaio completo de 18 minutos usando Plano B | **Pendente** |
 
 ## Evidências disponíveis nesta revisão
 
-- Compilação do firmware para `arduino:avr:uno` com Arduino CLI 1.6.0 e Arduino AVR Boards 1.8.8: aprovada em `MODO_RMS = 0` (8668 bytes de programa, 412 bytes globais) e em uma cópia temporária com `MODO_RMS = 1` (9354 bytes de programa, 412 bytes globais). O arquivo versionado continua no modo de potenciômetros. Avisos de parâmetros não utilizados vieram do core Arduino, não do sketch. Não houve upload.
+- O firmware anterior do grupo (handshake `HS`/`SYNC`, telemetria `TLM`) foi substituído pelo firmware do professor. A compilação registrada antes se referia ao firmware antigo; a compilação do firmware atual está **pendente**. Não houve upload.
 - Revisão do simulador e de seus comandos: realizada sobre a `main` citada. Execução POSIX e apresentação gráfica do Plano B: **pendentes neste ambiente Windows**.
 - Upload, medições, calibração, acionamento físico, quatro velocidades elétricas e remoção/reconexão do cabo: **não executados**.
 - A issue #66 só satisfaz o aceite físico após preencher os checklists e ensaiar com os quatro integrantes. O histórico final e o diálogo de limites assíncrono exigem integrar as entregas #63 e #62, respectivamente; esta branch de documentação continua independente delas.

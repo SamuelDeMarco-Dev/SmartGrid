@@ -304,7 +304,7 @@ class DashboardController(QObject):
             )
         self.view.avisar(
             "Proteção atuada",
-            "O disjuntor abriu espontaneamente.\n\nVerifique a instalação antes de religar a carga.",
+            "A proteção atuou e o disjuntor abriu.\n\nVerifique a instalação antes de religar a carga.",
         )
 
     def _ao_disparo_simulado(self, erro_gravacao: str) -> None:

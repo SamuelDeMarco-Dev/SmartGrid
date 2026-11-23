@@ -15,7 +15,7 @@ O apresentador indicado opera a tela durante seu bloco; Arthur manipula o circui
 
 1. Usar uma versão final integrada e identificada por commit. A documentação da #66 parte da `main` em `b01860e`, de 19/11/2026, e sua branch não contém a implementação da #63. A coluna/filtro de dispositivo e o novo histórico dependem da integração da #63. O diálogo MVC com gravação assíncrona e atualização dos limites no JSON depende da #62. Não apresentar funcionalidades pendentes como concluídas; verificar a versão antes do ensaio.
 2. Montar e validar a bancada de baixa tensão conforme [bancada.md](bancada.md). Todos os ensaios físicos permanecem pendentes até haver registro de execução com Arduino real.
-3. Gravar o firmware, conferir os quatro baud rates e deixar o cabo USB acessível. Nunca conectar a montagem à rede elétrica. Identificar A0, A1, D2 e D7 para explicar sem desmontar.
+3. Gravar o firmware, conferir os quatro baud rates e deixar o cabo USB acessível. Nunca conectar a montagem à rede elétrica. Identificar A0, A1, D11 (botão com pull-down), D12 (relé, ativo em LOW) e D13 (osciloscópio) para explicar sem desmontar.
 4. Preparar um banco demonstrativo com eventos de dias/tipos/dispositivos diferentes e pelo menos um evento sem vínculo. Usar dados identificados como preparação de ensaio; não atribuir telemetria sintética a medições reais. Não apagar o banco durante o seminário.
 5. Instalar dependências, ensaiar inicialização e encerramento, verificar porta e log. Manter Arduino Serial Monitor fechado. Deixar o modo de falha simulada **desligado** no início (`Ctrl+Shift+F` alterna o selo).
 6. Fazer backup de `data/config.json` com o aplicativo fechado e guardar capturas do estado inicial. Preparar os comandos da seção de JSON em um terminal; testar e restaurar no ensaio.
@@ -85,10 +85,10 @@ Destacar o histórico como exemplo: filtro → pedido ao worker → retorno → 
 1. Abrir **Comunicação Serial**, atualizar portas e escolher a porta efetiva da bancada. Mostrar timeout válido e a velocidade alvo, por exemplo 38400.
 2. Explicar `$CORPO*CS` seguido de quebra de linha. O corpo é ASCII, separado por vírgulas; `CS` é XOR dos bytes do corpo em dois dígitos hexadecimais. O checksum detecta erros de transmissão; não é criptografia.
 3. Clicar **Conectar**, acompanhando abertura, handshake, negociação e telemetria. Mostrar o log se as fases passarem rápido demais na tela.
-4. Narrar a sequência: “A conexão sempre começa a 9600. Enviamos `HS,38400,1000`; a placa confirma ainda a 9600. Trocamos a velocidade, enviamos `SYNC` e só depois do `ACK,SYNC` recebemos `TLM` periódico.” Esses exemplos mostram **corpos**, não pacotes prontos para digitar sem checksum.
-5. Exibir o checklist do ensaio nas quatro opções: 9600, 19200, 38400 e 115200. Se ainda não houver execução física, declarar a pendência. Explicar fallback para a velocidade menor quando o SYNC não é confirmado.
+4. Narrar a sequência: “A conexão sempre começa a 9600. Enviamos `!S38400`; a placa responde `ACK: INICIANDO EM 38400 BPS` ainda a 9600 e troca. A velocidade só é confirmada quando chega a primeira amostra `$DAT,...*CS` válida. A placa amostra a 200 Hz e o desktop publica a média de cada intervalo configurado.”
+5. Exibir o checklist do ensaio nas quatro opções: 9600, 19200, 38400 e 115200. Se ainda não houver execução física, declarar a pendência. Explicar o fallback: sem amostras na velocidade nova, o desktop envia `!P` (a placa volta a 9600) e tenta a velocidade menor.
 
-Resultado esperado: telemetria ativa, D13 aceso e evento de conexão persistido. Deixar a placa conectada para Samuel.
+Resultado esperado: telemetria ativa, onda de 100 Hz no D13, carga ABERTO (o firmware liga com o relé desligado) e evento de conexão persistido. Religar a carga pelo Dashboard antes de passar a palavra. Deixar a placa conectada para Samuel.
 
 ### 04:30–05:30 — Samuel: telemetria e indicadores
 
@@ -120,13 +120,13 @@ Fala: “Validamos antes de gravar e executamos o I/O de regras no worker. Em fa
 
 ### 10:00–11:00 — Samuel: corte de emergência e religamento
 
-Conferir modo de falha desligado e conexão ativa. Mostrar a carga fechada e clicar **CORTE DE EMERGÊNCIA**; ler e aceitar a confirmação. Arthur indica D7 apagado/relé aberto. Conferir badge ABERTO, corrente zero e novo evento no Histórico.
+Conferir modo de falha desligado e conexão ativa. Mostrar a carga fechada e clicar **CORTE DE EMERGÊNCIA**; ler e aceitar a confirmação. Arthur indica D12/relé desligado. Conferir badge ABERTO, corrente zero e novo evento no Histórico.
 
 Clicar **RELIGAR CARGA**, confirmar e observar o retorno do indicador físico e da corrente. Fala: “Atualizamos os estados e o evento em uma transação. Só depois do commit o comando de relé é encaminhado à placa. A confirmação serial é acompanhada no log; o banco não torna o hardware parte de uma transação ACID.”
 
 ### 11:00–12:00 — Arthur: bancada e disparo espontâneo
 
-Apontar A0/A1, D2 com pull-up, D7 e D13. Explicar que não há conexão de rede e que a escala exibida é simulada. Com carga fechada, pressionar e soltar D2. A placa abre a carga antes de qualquer clique no desktop; a telemetria reporta disjuntor aberto, o app mostra o aviso e persiste o disparo vinculado ao dispositivo.
+Apontar A0/A1, D11 com pull-down, D12 e D13. Explicar que não há conexão de rede e que a escala exibida é simulada. Com carga fechada, pressionar e soltar o botão em D11. O firmware só reporta o botão no campo `botao` da amostra; o desktop detecta a borda, grava a intenção, envia `!0` e, quando a telemetria confirma o relé desligado, mostra o aviso de proteção e persiste os eventos vinculados ao dispositivo.
 
 Mostrar a nova linha de auditoria. Soltar completamente o botão, fechar o aviso e religar mediante confirmação. Se a persistência falhar após um disparo real, a tela deve continuar mostrando ABERTO e avisar sobre o registro: software não pode desfazer uma proteção que já atuou fisicamente.
 
@@ -136,7 +136,7 @@ Arthur remove o cabo USB durante a telemetria. Davy narra: “O worker detecta e
 
 Reconectar fisicamente, aguardar a enumeração da porta e o encerramento do worker antigo. Atualizar portas, selecionar o nome correto e clicar **Conectar**. Mostrar um novo handshake a 9600 e a retomada da telemetria. A reconexão atual é **manual**, com novo worker.
 
-Ressalva da demonstração: se o UNO só recebe energia pelo USB, removê-lo também desliga a placa. Isso não demonstra o watchdog de comunicação da placa. O watchdog de 5 s é outro ensaio, com placa alimentada e cliente que deixa a porta aberta sem enviar mensagens; ele volta à espera e não abre automaticamente o relé.
+Ressalva da demonstração: se o UNO só recebe energia pelo USB, removê-lo também desliga a placa. O firmware do professor não tem watchdog de comunicação: quem detecta a queda é o desktop, pelo silêncio acima de 3 × intervalo + timeout. Ao reconectar, o UNO reinicia pelo DTR e volta com o relé desligado; o app não religa sozinho.
 
 ### 13:30–15:00 — Lucas: exclusão controlada e recriação do JSON
 
@@ -154,7 +154,7 @@ Conferir o Histórico e o log (`Rollback executado`). Desativar o modo de teste 
 
 ### 16:00–17:00 — Davy: Plano B
 
-Apresentar o ambiente alternativo preparado conforme [bancada.md](bancada.md#plano-b--placa-virtual). No terminal do simulador: `d` + Enter dispara, `x` + Enter fecha a pty e `q` + Enter encerra. Depois de `x`, reiniciar o simulador e usar o caminho novo para reconectar. `--falhar-sync 115200` permite exercitar fallback para 38400.
+Apresentar o ambiente alternativo preparado conforme [bancada.md](bancada.md#plano-b--placa-virtual). No terminal do simulador: `b` + Enter pressiona o botão, `x` + Enter fecha a pty e `q` + Enter encerra. Depois de `x`, reiniciar o simulador e usar o caminho novo para reconectar. `--falhar-em 115200` permite exercitar fallback para 38400.
 
 Fala: “A máquina de estados e os pacotes são os mesmos, mas a pty não impõe a velocidade elétrica. Não há potenciômetros, relé físico, ruído ou calibração. No Windows precisamos de Linux/macOS, VM ou WSL 2 com o app também no Linux; o Python Windows não possui `termios`.”
 
@@ -242,9 +242,9 @@ Preservar o diretório indicado por `pasta_backup_demo`. Se o primeiro `cp` do b
 | O que uma transação protege? | Na operação de corte, alterações de dispositivos e inserção do evento são confirmadas juntas. Em exceção antes do commit, rollback restaura o banco. A emissão de confirmação e o comando serial ocorrem após o commit; o efeito físico não é revertido pelo SQLite. |
 | WAL resolve qualquer concorrência? | Não. WAL favorece leitores enquanto há escrita, mas SQLite continua com restrições de escrita e pode falhar por lock/disco. Usamos timeout, transações e tratamento de erro; I/O demorado fica fora da GUI durante a operação das telas refatoradas. |
 | O que acontece quando uma proteção física atua e o banco falha? | O disjuntor já abriu. O app mostra ABERTO e informa falha de registro; não tenta fechar a carga para simular rollback. É um caso diferente de um comando ainda não enviado. |
-| Por que o handshake começa em 9600? | É o ponto comum após boot/reset e retorno à espera. O alvo é negociado pelo HS/ACK; SYNC confirma a nova velocidade antes da telemetria. As opções são 9600, 19200, 38400 e 115200. |
+| Por que o handshake começa em 9600? | É a velocidade da placa após boot/reset e após `!P`. O alvo é pedido com `!S<baud>` e aceito com `ACK: INICIANDO`; a primeira amostra `DAT` válida confirma a nova velocidade. As opções são 9600, 19200, 38400 e 115200. |
 | O checksum garante segurança? | O XOR identifica parte dos erros acidentais e delimita pacotes inválidos; não autentica o host nem protege contra adulteração. Não há criptografia ou garantia de detectar todos os padrões de erro. |
-| Qual watchdog foi implementado? | Watchdog do link por `millis()`: 5 s sem mensagem válida de host fazem a placa voltar a 9600 aguardando link. Não é o watchdog de hardware do AVR e não implica abertura automática do relé. O desktop tem seu próprio limite de silêncio. |
+| Qual watchdog foi implementado? | O firmware do professor não tem watchdog. A detecção de queda é do desktop: sem amostras por 3 × intervalo + timeout, o `SerialWorker` declara Link perdido. Ao desconectar, o desktop envia `!P` para a placa parar e voltar a 9600. |
 | A reconexão é automática? | Não. O worker da conexão perdida termina. O operador reconecta/atualiza a porta e solicita outra conexão; nasce um novo worker que repete o handshake e alinha o relé ao estado persistido. |
 | Como encerram sem destruir QThread ativa? | Pedimos parada cooperativa; o banco drena pedidos anteriores à sentinela, e a serial percebe a interrupção no laço. `finished` liga a `deleteLater`; no encerramento o controller aguarda os workers com prazo e registra falhas. |
 | Por que recriar JSON não zera as regras? | Na base de referência, `limites_iniciais` semeia um banco novo; regras existentes estão no SQLite. A entrega #62 sincroniza os limites salvos com o JSON. Backup/restauração não deve apagar o banco. Conferir a versão integrada. |
