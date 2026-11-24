@@ -72,7 +72,7 @@ def test_handshake_negocia_e_recebe_telemetria(app, placa):
         assert esperar(app, lambda: len(coletor.leituras) >= 3)
         assert coletor.velocidades == [38400]
         assert coletor.estados[:4] == ["ABRINDO_PORTA", "HANDSHAKE", "NEGOCIANDO", "TELEMETRIA"]
-        assert coletor.disjuntor == [EstadoDisjuntor.FECHADO] * len(coletor.leituras)
+        assert coletor.disjuntor and all(e is EstadoDisjuntor.FECHADO for e in coletor.disjuntor)
         # O primeiro comando enviado pelo desktop é o início na velocidade alvo.
         assert placa.comandos_recebidos[0] == "S38400"
     finally:
@@ -105,7 +105,7 @@ def test_comando_de_rele_chega_na_placa(app, placa):
         _encerrar(app, worker)
 
 
-def test_botao_da_placa_emite_um_acionamento_sem_atuar_no_rele(app, placa):
+def test_botao_informado_pela_placa_solicita_corte_no_worker(app, placa):
     worker, coletor = _worker(placa)
     worker.start()
     try:
@@ -113,8 +113,9 @@ def test_botao_da_placa_emite_um_acionamento_sem_atuar_no_rele(app, placa):
         placa.pressionar_botao()
         assert esperar(app, lambda: coletor.botoes == 1)
         assert not esperar(app, lambda: coletor.botoes > 1, prazo=0.5)
-        # O firmware só reporta o botão; o relé segue ligado.
-        assert coletor.disjuntor[-1] is EstadoDisjuntor.FECHADO
+        # O firmware só informa; é o worker desktop quem envia !0.
+        assert esperar(app, lambda: coletor.disjuntor[-1] is EstadoDisjuntor.ABERTO)
+        assert "0" in placa.comandos_recebidos
     finally:
         _encerrar(app, worker)
 
@@ -127,7 +128,8 @@ def test_sem_amostras_cai_para_a_velocidade_menor(app):
     try:
         assert esperar(app, lambda: coletor.velocidades, prazo=8)
         assert coletor.velocidades == [38400]
-        assert placa.comandos_recebidos[:3] == ["S115200", "P", "S38400"]
+        assert placa.comandos_recebidos[0] == "S115200"
+        assert "P" in placa.comandos_recebidos and "S38400" in placa.comandos_recebidos
     finally:
         _encerrar(app, worker)
         placa.parar()

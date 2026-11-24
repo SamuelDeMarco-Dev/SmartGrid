@@ -1,262 +1,127 @@
-# Seminário SmartGrid — entrega final A1/5
+# Seminário SmartGrid — integração final com Arduino UNO
 
-Tempo alvo: **18 minutos**, com até 2 minutos de margem para o boot da placa e transições. Arguição após a exposição. Cada integrante tem **4 min 30 s** de fala/execução.
+Revisão: 23/11/2026. Tempo alvo: **18 minutos**, com 2 minutos de margem. Cada integrante tem 4 min 30 s de fala/execução. A arguição ocorre depois.
 
-| Integrante | Responsabilidade na demonstração |
+| Integrante | Responsabilidade |
 |---|---|
-| Samuel De Marco | Objetivo, arquitetura geral, Dashboard, telemetria e comandos de carga |
-| Davy Josias Scheuermann | Comunicação serial, protocolo, handshake, estados, falha USB e Plano B |
-| Lucas Zamoner Locatelli | Limites, validações, persistência de regras e configurações, resultados de testes |
-| Arthur De Marco Faggion | Histórico MVC, filtros e auditoria, bancada, disparo e integridade transacional |
+| Samuel De Marco | Objetivo, arquitetura, Dashboard e comandos manuais |
+| Davy Josias Scheuermann | Protocolo, conexão, perda de link e contingência |
+| Lucas Zamoner Locatelli | Limites de alerta, configuração e testes |
+| Arthur De Marco Faggion | Histórico, bancada, botão e integridade transacional |
 
-O apresentador indicado opera a tela durante seu bloco; Arthur manipula o circuito quando necessário. Um cronômetro permanece visível para a equipe.
+## Preparação
 
-## Condições para o ensaio final
-
-1. Usar uma versão final integrada e identificada por commit. A documentação da #66 parte da `main` em `b01860e`, de 19/11/2026, e sua branch não contém a implementação da #63. A coluna/filtro de dispositivo e o novo histórico dependem da integração da #63. O diálogo MVC com gravação assíncrona e atualização dos limites no JSON depende da #62. Não apresentar funcionalidades pendentes como concluídas; verificar a versão antes do ensaio.
-2. Montar e validar a bancada de baixa tensão conforme [bancada.md](bancada.md). Todos os ensaios físicos permanecem pendentes até haver registro de execução com Arduino real.
-3. Gravar o firmware, conferir os quatro baud rates e deixar o cabo USB acessível. Nunca conectar a montagem à rede elétrica. Identificar A0, A1, D11 (botão com pull-down), D12 (relé, ativo em LOW) e D13 (osciloscópio) para explicar sem desmontar.
-4. Preparar um banco demonstrativo com eventos de dias/tipos/dispositivos diferentes e pelo menos um evento sem vínculo. Usar dados identificados como preparação de ensaio; não atribuir telemetria sintética a medições reais. Não apagar o banco durante o seminário.
-5. Instalar dependências, ensaiar inicialização e encerramento, verificar porta e log. Manter Arduino Serial Monitor fechado. Deixar o modo de falha simulada **desligado** no início (`Ctrl+Shift+F` alterna o selo).
-6. Fazer backup de `data/config.json` com o aplicativo fechado e guardar capturas do estado inicial. Preparar os comandos da seção de JSON em um terminal; testar e restaurar no ensaio.
-7. Preparar previamente o Plano B em Linux/macOS ou WSL 2 com WSLg. App e simulador rodam no mesmo ambiente. Ter uma gravação local identificada como contingência caso também falhe o ambiente virtual.
-8. Registrar data, versão, operadores e resultados nos checklists. Upload, calibração, comportamento físico e ensaio presencial **não foram executados por esta entrega de software**.
+1. Montar a bancada conforme [bancada.md](bancada.md): A0 tensão, A1 corrente, D11 Active HIGH/pull-down externo, D12 relé Active LOW e D13 no osciloscópio.
+2. Carregar o firmware obrigatório sem alterações e fechar Monitor Serial. Testar previamente as quatro velocidades e usar 115200 no seminário.
+3. Usar um checkout identificado, dependências instaladas e backup do SQLite/JSON com o app fechado. Registrar separadamente a alteração do firmware já existente na área de trabalho. Não fazer commit/push sem revisão da equipe.
+4. Deixar o modo de falha simulada desligado inicialmente; `Ctrl+Shift+F` alterna e mostra o selo. Preparar um banco descartável para falhas reais de escrita.
+5. Preparar eventos de tipos/datas/dispositivos diferentes, identificando dados sintéticos. Não limpar o histórico usado como evidência.
+6. Executar testes automatizados e preencher os ensaios físicos apenas depois de realizados. Os testes em memória e os de GUI offscreen não substituem Arduino e osciloscópio.
+7. Preparar o Plano B em Linux/macOS ou WSL com app e simulador no mesmo ambiente; ter uma gravação de contingência identificada.
 
 ## Ordem e divisão do tempo
 
-| Tempo | Duração | Quem | Bloco |
-|---|---|---|---|
-| 00:00–01:00 | 1:00 | Samuel | Problema e objetivo |
-| 01:00–02:30 | 1:30 | Samuel | MVC e três threads |
-| 02:30–04:30 | 2:00 | Davy | Protocolo e handshake ao vivo |
-| 04:30–05:30 | 1:00 | Samuel | Telemetria e indicadores |
-| 05:30–07:30 | 2:00 | Arthur | Histórico, filtros e auditoria |
-| 07:30–10:00 | 2:30 | Lucas | Limites, validações e persistência |
-| 10:00–11:00 | 1:00 | Samuel | Corte e religamento |
-| 11:00–12:00 | 1:00 | Arthur | Bancada e disparo espontâneo |
-| 12:00–13:30 | 1:30 | Davy | Falha USB e reconexão |
-| 13:30–15:00 | 1:30 | Lucas | Ausência do JSON e recriação dos padrões |
-| 15:00–16:00 | 1:00 | Arthur | Falha transacional induzida e auditoria |
-| 16:00–17:00 | 1:00 | Davy | Plano B e suas limitações |
-| 17:00–17:30 | 0:30 | Lucas | Evidências e testes pendentes |
-| 17:30–18:00 | 0:30 | Arthur | Encerramento e conclusões |
-| **Total** | **18:00** | **4:30 por pessoa** | **Até 20:00 com margem** |
+| Tempo | Quem | Demonstração e resultado esperado |
+|---|---|---|
+| 00:00–01:00 | Samuel | Supervisão didática com potenciômetros e auditoria persistente |
+| 01:00–02:30 | Samuel | MVC e três threads; GUI não faz serial/SQLite |
+| 02:30–04:30 | Davy | !S, ACK textual e DAT; boot/reset e velocidade confirmada |
+| 04:30–05:30 | Samuel | Médias, P=V×I e gráfico; Timer1 200 Hz e D13 100 Hz |
+| 05:30–07:30 | Arthur | Histórico por tipo/data/dispositivo, consulta de medições e atualização após commit |
+| 07:30–10:00 | Lucas | Limites, validação, alertas de picos, persistência e setpoint |
+| 10:00–11:00 | Samuel | Corte e religamento manuais, commit e confirmação DAT |
+| 11:00–12:00 | Arthur | Botão D11, prioridade do corte, liberação sem religamento automático |
+| 12:00–13:30 | Davy | Falha USB, estado desconhecido e reconexão manual |
+| 13:30–15:00 | Lucas | Recriação de JSON e padrões, com restauração do backup |
+| 15:00–16:00 | Arthur | Falha simulada: rollback sem comando enviado |
+| 16:00–17:00 | Davy | Plano B com !S/DAT; limites da simulação |
+| 17:00–17:30 | Lucas | Testes aprovados e ensaios físicos pendentes |
+| 17:30–18:00 | Arthur | Carga em estado combinado, pausa e liberação dos recursos |
 
-Se o handshake ou a recuperação consumir a margem, mostrar a evidência já capturada e continuar. Não repetir indefinidamente uma operação diante da banca. O ensaio normal deve caber em 18 minutos; testar as quatro velocidades na preparação e mostrar uma ao vivo, exibindo os registros das outras três.
+## Falas e passos observáveis
 
-## Falas, ações e critérios observáveis
+### Arquitetura
 
-### 00:00–01:00 — Samuel: problema e objetivo
+“A View desenha e publica ações. Os controllers coordenam. Models guardam protocolo, regras e repositórios. A GUI recebe sinais; SerialWorker atende a porta e o botão, e DatabaseWorker grava SQLite/JSON e executa consultas. São três threads na aplicação. Somente o simulador externo possui seu próprio laço de emulação.”
 
-Fala sugerida: “O SmartGrid é um supervisório didático de uma carga elétrica. Recebemos tensão, corrente e estado do disjuntor da placa, mostramos a telemetria, aplicamos limites de alerta e registramos as operações para consulta posterior. Nesta bancada, os potenciômetros simulam as grandezas em baixa tensão.”
+### Conexão e telemetria
 
-Mostrar o circuito e a janela inicial. Identificar brevemente o trabalho de cada integrante. Diferenciar supervisão, sinalização de alerta e comando de corte: não prometer corte automático por limite se essa função não existe.
+1. Atualizar portas e selecionar a porta real. Escolher 115200, timeout de 1000 ms e agregação de 1000 ms.
+2. Narrar: “Abrimos em 9600, tolerando o boot do UNO. Enviamos `!S115200` com LF. O ACK textual sai na velocidade anterior; DAT válido confirma a nova velocidade. Se o ACK se perder, ainda testamos DAT.”
+3. Mostrar a velocidade negociada e o relé inicialmente aberto, conforme o firmware. Não há religamento automático ao conectar.
+4. Explicar a recuperação: “Sem DAT, enviamos `!P` nas possíveis velocidades e reiniciamos em 9600. Não há SYNC, PING ou watchdog no firmware.” Mostrar registros das quatro opções; não gastar a apresentação repetindo todas.
+5. Religar manualmente com o botão solto. Variar potenciômetros: A0 × 250/1023 V, A1 × 20/1023 A, P=V×I. Relé aberto implica corrente/potência zero no desktop.
+6. No osciloscópio: Timer1 interrompe a 200 Hz (5 ms) e D13 alterna a 100 Hz (10 ms por ciclo). O campo de agregação muda só as médias do desktop. Outras velocidades podem perder amostras por falta de vazão serial.
 
-Transição: “Samuel mostra como o software separa essas responsabilidades; depois Davy estabelece o link com a placa.”
+### Histórico e limites
 
-### 01:00–02:30 — Samuel: arquitetura MVC e concorrência
+Consultar eventos por tipo, data e dispositivo e medições por últimas N/intervalo. Comparar os pontos agregados do gráfico com o SQLite. O histórico recebe eventos persistidos após commit.
 
-Mostrar este diagrama ou os diretórios do projeto:
+Alterar limites de tensão/corrente/potência. Testar entrada vazia/inválida, cancelar e confirmar. Mostrar que o setpoint de potência acompanha a regra ativa. Ultrapassar um limite: alerta visual e uma ocorrência por transição, sem corte automático. Máximos recebidos na janela evitam que a média esconda um pico nos alertas; amostras perdidas pelo UNO não podem ser reconstruídas.
 
-```mermaid
-flowchart LR
-    subgraph GUI[Thread principal / GUI]
-        V[Views: widgets e ações] <-->|Signals e Slots| C[Controllers: coordenação]
-    end
-    subgraph SERIAL[Thread SerialWorker]
-        S[Porta serial, handshake e pacotes]
-    end
-    subgraph BANCO[Thread DatabaseWorker]
-        D[Repositórios, SQLite e transações]
-    end
-    C -->|Fila de comandos| S
-    S -->|Sinais: leituras e estado| C
-    C -->|Fila: executar / gravar| D
-    D -->|Resultado / erro / evento persistido| C
-    C -->|Valores prontos| V
-```
+### Comandos e botão
 
-Fala: “A View desenha e emite ações. O Controller decide qual operação pedir. O Model contém protocolo, regras e repositórios. Os arquivos `_ui.py` são gerados pelo Qt Designer e pelo `pyuic6`, sem lógica de negócio. `AplicacaoController` cria um `DatabaseWorker` compartilhado e um novo `SerialWorker` a cada conexão. A serial e o SQLite trabalham nas suas threads; a GUI recebe sinais e callbacks.”
+1. Confirmar corte manual. O SQLite grava solicitação e estados na mesma transação; depois sai `!0`. O badge muda após RELE=0 em DAT, não pelo ACK ou commit. Religar com nova confirmação.
+2. Com carga ligada, pressionar D11. Mostrar corte, ocorrência e bloqueio de religamento enquanto retido. Soltar e demonstrar que a carga permanece aberta; então pedir novo religamento manual.
+3. Explicar: “O primeiro HIGH solicita corte imediatamente na thread serial. A liberação usa debounce de 50 ms. Pressão invalida um religamento que estava esperando o banco. O corte físico não depende do commit.”
+4. Mostrar evidências preparadas para botão pressionado antes da conexão e durante religamento. Em banco descartável, testar falha real de escrita: !0 continua saindo, o DAT confirma e a falha de registro é informada.
+5. Declarar: **o botão depende do desktop e da serial; não é proteção elétrica independente.**
 
-Destacar o histórico como exemplo: filtro → pedido ao worker → retorno → preenchimento em lotes. Não afirmar que qualquer método de uma subclasse de `QThread` roda automaticamente no segundo plano; a fila é consumida dentro de `run()`. A inicialização de config/esquema é anterior à operação normal; a auditoria das demais telas depende da integração das respectivas entregas.
+### Falha USB e recuperação
 
-### 02:30–04:30 — Davy: protocolo, velocidades e handshake
+Remover o USB: Link perdido e estado **DESCONHECIDO**, sem confundir a intenção persistida com o estado reportado. Não afirmar carga desligada. Se USB era a única alimentação, também houve desligamento da placa; isso não simula perda de comunicação com placa alimentada.
 
-1. Abrir **Comunicação Serial**, atualizar portas e escolher a porta efetiva da bancada. Mostrar timeout válido e a velocidade alvo, por exemplo 38400.
-2. Explicar `$CORPO*CS` seguido de quebra de linha. O corpo é ASCII, separado por vírgulas; `CS` é XOR dos bytes do corpo em dois dígitos hexadecimais. O checksum detecta erros de transmissão; não é criptografia.
-3. Clicar **Conectar**, acompanhando abertura, handshake, negociação e telemetria. Mostrar o log se as fases passarem rápido demais na tela.
-4. Narrar a sequência: “A conexão sempre começa a 9600. Enviamos `!S38400`; a placa responde `ACK: INICIANDO EM 38400 BPS` ainda a 9600 e troca. A velocidade só é confirmada quando chega a primeira amostra `$DAT,...*CS` válida. A placa amostra a 200 Hz e o desktop publica a média de cada intervalo configurado.”
-5. Exibir o checklist do ensaio nas quatro opções: 9600, 19200, 38400 e 115200. Se ainda não houver execução física, declarar a pendência. Explicar o fallback: sem amostras na velocidade nova, o desktop envia `!P` (a placa volta a 9600) e tenta a velocidade menor.
+Reconectar cabo, esperar enumeração e término do worker anterior, atualizar portas e conectar manualmente. O estado vem do DAT. O desktop não religa automaticamente. Para ensaiar placa ainda transmitindo, usar alimentação separada e o procedimento da bancada; não esperar retorno espontâneo a 9600.
 
-Resultado esperado: telemetria ativa, onda de 100 Hz no D13, carga ABERTO (o firmware liga com o relé desligado) e evento de conexão persistido. Religar a carga pelo Dashboard antes de passar a palavra. Deixar a placa conectada para Samuel.
+### JSON e falha simulada
 
-### 04:30–05:30 — Samuel: telemetria e indicadores
+Com app fechado e backup pronto, renomear `data/config.json` para um nome de backup não existente, iniciar e mostrar padrões: COM1, 115200, timeout 1000 ms, agregação 1000 ms, limites iniciais 15 A/230 V/3500 W e falha simulada false. Selecionar a porta real, encerrar e restaurar o arquivo original. Não apagar o banco: regras existentes continuam vindo do SQLite.
 
-Girar A0 e A1 separadamente, devagar. Mostrar tensão, corrente, potência e novos pontos no gráfico em **Tempo real**. Explicar `P = V × I`: representa o modelo resistivo da bancada; não mede fator de potência ou potência ativa exata em uma carga reativa.
+Ligar `Ctrl+Shift+F` e solicitar um corte manual. Conferir rollback por SQL: os dois estados e a quantidade de eventos do comando permanecem anteriores; nenhum !0 manual é enviado. Desligar o modo e repetir. A falha simulada aplica-se à operação manual, nunca impede o botão D11.
 
-Abrir o modo **Histórico** do gráfico e consultar as últimas N leituras ou um intervalo válido. Mostrar que o gráfico usa leituras persistidas e que a consulta é assíncrona. Voltar a Tempo real; a recepção continuou durante a consulta. Evitar confundir histórico de medições com histórico de eventos.
-
-### 05:30–07:30 — Arthur: histórico de eventos
-
-1. Abrir **Histórico** e indicar Data/Hora, Tipo, Descrição, Valor Medido e Dispositivo, após integrar #63.
-2. Aplicar tipo **Comando**, uma data inicial já preparada e o dispositivo **DISJ-01**. Explicar que os filtros se combinam e que **Todos os dispositivos** também inclui eventos sem vínculo, apresentados como **Sem dispositivo**.
-3. Alternar filtros e retornar ao estado geral. Mostrar a indicação de carregamento e a navegação responsiva com o conjunto preparado de milhares de registros.
-4. Fala: “O sinal `evento_registrado` pede gravação. Só `evento_persistido`, após o commit, permite atualizar o histórico. Agrupamos notificações e consultamos apenas IDs novos com o dispositivo real por LEFT JOIN. O ID evita duplicatas sem eliminar eventos distintos com texto e horário iguais.”
-5. Explicar proteção contra respostas antigas de filtros. Abrir a confirmação de **Limpar histórico** e escolher **Não** para preservar as evidências da apresentação. A limpeza efetiva é ensaiada em banco descartável e tem retorno assíncrono de sucesso ou erro.
-
-Resultado esperado: dados coerentes com o filtro, nenhum evento inventado antes da persistência e consulta sem travar a janela.
-
-### 07:30–10:00 — Lucas: limites e validações
-
-Pré-condição: integração da #62 para demonstrar MVC, gravação assíncrona e atualização de `limites_iniciais` no JSON. Na `main` de referência, essas mudanças ainda eram uma dependência; não afirmar que já estavam presentes.
-
-1. Abrir **Configurar Limites** pelo Dashboard. Explicar nome, grandeza, limite máximo e estado ativo.
-2. Mostrar uma tentativa inválida preparada no ensaio (campo obrigatório vazio ou valor fora da faixa permitida) e a mensagem correspondente. Não inventar uma entrada que o widget numérico nem permite digitar.
-3. Configurar pelo menos duas regras válidas, como tensão e corrente, dentro da escala simulada e próximas aos valores atuais. Salvar; mostrar o botão indisponível enquanto a gravação assíncrona está pendente e o retorno ao Dashboard após sucesso.
-4. Conferir o resumo das regras, o banco e os limites salvos no JSON conforme a versão integrada. Girar A0/A1 além de um limite, observar o alerta e o evento correspondente; normalizar a leitura.
-5. Distinguir alerta de atuação: os limites sinalizam a violação e a auditoria. O corte demonstrado a seguir é uma ação confirmada pelo operador; o botão físico é outro caminho de disparo.
-
-Fala: “Validamos antes de gravar e executamos o I/O de regras no worker. Em falha, avisamos o operador e preservamos a consistência da transação. O JSON guarda configuração; o SQLite guarda as entidades e a auditoria.”
-
-### 10:00–11:00 — Samuel: corte de emergência e religamento
-
-Conferir modo de falha desligado e conexão ativa. Mostrar a carga fechada e clicar **CORTE DE EMERGÊNCIA**; ler e aceitar a confirmação. Arthur indica D12/relé desligado. Conferir badge ABERTO, corrente zero e novo evento no Histórico.
-
-Clicar **RELIGAR CARGA**, confirmar e observar o retorno do indicador físico e da corrente. Fala: “Atualizamos os estados e o evento em uma transação. Só depois do commit o comando de relé é encaminhado à placa. A confirmação serial é acompanhada no log; o banco não torna o hardware parte de uma transação ACID.”
-
-### 11:00–12:00 — Arthur: bancada e disparo espontâneo
-
-Apontar A0/A1, D11 com pull-down, D12 e D13. Explicar que não há conexão de rede e que a escala exibida é simulada. Com carga fechada, pressionar e soltar o botão em D11. O firmware só reporta o botão no campo `botao` da amostra; o desktop detecta a borda, grava a intenção, envia `!0` e, quando a telemetria confirma o relé desligado, mostra o aviso de proteção e persiste os eventos vinculados ao dispositivo.
-
-Mostrar a nova linha de auditoria. Soltar completamente o botão, fechar o aviso e religar mediante confirmação. Se a persistência falhar após um disparo real, a tela deve continuar mostrando ABERTO e avisar sobre o registro: software não pode desfazer uma proteção que já atuou fisicamente.
-
-### 12:00–13:30 — Davy: perda USB e recuperação
-
-Arthur remove o cabo USB durante a telemetria. Davy narra: “O worker detecta erro de I/O ou silêncio; o estado passa para Link perdido. Sem novas amostras os indicadores param e os comandos ficam indisponíveis, mas a GUI continua processando ações.” Navegar pelo Histórico enquanto o link está indisponível e mostrar o evento de perda quando persistido.
-
-Reconectar fisicamente, aguardar a enumeração da porta e o encerramento do worker antigo. Atualizar portas, selecionar o nome correto e clicar **Conectar**. Mostrar um novo handshake a 9600 e a retomada da telemetria. A reconexão atual é **manual**, com novo worker.
-
-Ressalva da demonstração: se o UNO só recebe energia pelo USB, removê-lo também desliga a placa. O firmware do professor não tem watchdog de comunicação: quem detecta a queda é o desktop, pelo silêncio acima de 3 × intervalo + timeout. Ao reconectar, o UNO reinicia pelo DTR e volta com o relé desligado; o app não religa sozinho.
-
-### 13:30–15:00 — Lucas: exclusão controlada e recriação do JSON
-
-Usar o procedimento seguro abaixo, preparado no ensaio. Desconectar e **fechar o aplicativo** antes de copiar ou excluir arquivos. Remover somente `data/config.json`, após verificar o backup. Reiniciar o app; mostrar o arquivo recriado, os padrões e a mensagem de criação no log. Não apagar `smartgrid.db`.
-
-Padrões esperados na versão de referência: `porta_com: COM1`, `baud_rate: 115200`, `timeout_ms: 1000`, `taxa_amostragem_ms: 1000`, limites iniciais de 15 A, 230 V e 3500 W e `simular_falha_corte: false`. A placa ainda começa o handshake a 9600. O campo de porta padrão pode não corresponder à bancada; restaurar a configuração e selecionar a porta real antes de reconectar.
-
-Fechar novamente, guardar opcionalmente o JSON recriado como evidência e restaurar o backup. Conferir seu hash, reiniciar e reconectar. Explicar que, na implementação de referência, os limites iniciais semeiam um banco novo; recriar o JSON não apaga ou redefine as regras já persistidas no SQLite. Conferir eventuais mudanças da #62 na versão integrada.
-
-### 15:00–16:00 — Arthur: falha transacional induzida
-
-Com carga fechada, anotar estado e último evento. Ativar `Ctrl+Shift+F` e indicar o selo **MODO DE TESTE: falha simulada**. Solicitar o corte e confirmar. Mostrar a mensagem de rollback: os estados no banco e o evento da tentativa não devem ser confirmados, nem deve ser enviado o corte à placa.
-
-Conferir o Histórico e o log (`Rollback executado`). Desativar o modo de teste imediatamente. Repetir o corte com sucesso e, se necessário, religar. Distinguir essa injeção de falha no banco da remoção USB anterior. Não afirmar que rollback desfaz um disparo físico ou que SQLite e relé formam uma única transação distribuída.
-
-### 16:00–17:00 — Davy: Plano B
-
-Apresentar o ambiente alternativo preparado conforme [bancada.md](bancada.md#plano-b--placa-virtual). No terminal do simulador: `b` + Enter pressiona o botão, `x` + Enter fecha a pty e `q` + Enter encerra. Depois de `x`, reiniciar o simulador e usar o caminho novo para reconectar. `--falhar-em 115200` permite exercitar fallback para 38400.
-
-Fala: “A máquina de estados e os pacotes são os mesmos, mas a pty não impõe a velocidade elétrica. Não há potenciômetros, relé físico, ruído ou calibração. No Windows precisamos de Linux/macOS, VM ou WSL 2 com o app também no Linux; o Python Windows não possui `termios`.”
-
-Na apresentação normal, mostrar uma captura do ensaio do Plano B e seus comandos, sem trocar todo o ambiente em um minuto. Se a bancada falhar, acionar o ambiente virtual já aberto e identificar claramente a mudança. O Plano B não aprova os testes de hardware.
-
-### 17:00–17:30 — Lucas: evidências de validação
-
-Mostrar uma tabela curta com data/commit e três grupos: testes automatizados aprovados, testes não executados ou com falhas conhecidas e ensaios físicos. Na revisão desta entrega houve compilação para UNO e testes do histórico; a suíte completa no Windows encontrou módulos dependentes de POSIX e uma falha preexistente do teste de Dashboard. Consultar o relatório da versão integrada antes de informar totais.
-
-Não mostrar uma marca verde para teste pendente, nem chamar compilação de upload. Evidências físicas e o ensaio do Plano B permanecem pendentes até sua execução pela equipe.
-
-### 17:30–18:00 — Arthur: encerramento
-
-Conferir modo de teste desligado, configuração restaurada e carga no estado combinado. Desconectar a serial e fechar o SmartGrid, mostrando a liberação da porta e a parada cooperativa dos workers. Fala: “Entregamos supervisão com separação de responsabilidades, comunicação negociada e auditoria persistente. A evolução exige completar as evidências da bancada e medir as limitações físicas; a simulação facilita repetir cenários, mas não substitui essas medições.” Abrir para perguntas.
-
-## Comandos para o teste de configuração
-
-Executar somente no clone usado na demonstração, a partir da raiz, com o app fechado. Os comandos não foram executados sobre a configuração pessoal nesta entrega.
-
-### PowerShell — backup e exclusão de um único arquivo
-
-```powershell
-$configDemo = (Resolve-Path -LiteralPath '.\data\config.json' -ErrorAction Stop).Path
-$dataDemo = (Resolve-Path -LiteralPath '.\data' -ErrorAction Stop).Path
-if ($configDemo -ne (Join-Path $dataDemo 'config.json')) { throw 'Caminho inesperado' }
-$pastaBackupDemo = Join-Path $env:TEMP ('SmartGrid-demo-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
-New-Item -ItemType Directory -Path $pastaBackupDemo -ErrorAction Stop | Out-Null
-$backupConfigDemo = Join-Path $pastaBackupDemo 'config-original.json'
-Copy-Item -LiteralPath $configDemo -Destination $backupConfigDemo -ErrorAction Stop
-$hashConfigDemo = (Get-FileHash -LiteralPath $configDemo -Algorithm SHA256).Hash
-if ((Get-FileHash -LiteralPath $backupConfigDemo -Algorithm SHA256).Hash -ne $hashConfigDemo) {
-    throw 'Backup não confere; não excluir o original'
-}
-Remove-Item -LiteralPath $configDemo -ErrorAction Stop
-.\.venv\Scripts\python.exe main.py
-```
-
-Enquanto o app está aberto, inspecionar o JSON recriado em outra janela do editor/terminal. **Fechar o app** para continuar no mesmo terminal e restaurar:
-
-```powershell
-Copy-Item -LiteralPath $configDemo -Destination (Join-Path $pastaBackupDemo 'config-padroes-gerado.json') -ErrorAction Stop
-Copy-Item -LiteralPath $backupConfigDemo -Destination $configDemo -Force -ErrorAction Stop
-if ((Get-FileHash -LiteralPath $configDemo -Algorithm SHA256).Hash -ne $hashConfigDemo) {
-    throw 'Restauração não confere'
-}
-.\.venv\Scripts\python.exe main.py
-```
-
-O backup fica fora do repositório e é preservado. Se a aplicação não recriar o JSON, registrar a falha e restaurar diretamente o backup, sem depender da cópia opcional do arquivo gerado. Se o arquivo original não existir na preparação, inicializar e fechar o app antes de iniciar o procedimento.
-
-### Linux/macOS — no ambiente do Plano B
+### Plano B e encerramento
 
 ```bash
-test -f data/config.json || exit 1
-pasta_backup_demo=$(mktemp -d)
-cp data/config.json "$pasta_backup_demo/config-original.json" || exit 1
-cmp data/config.json "$pasta_backup_demo/config-original.json" || exit 1
-rm data/config.json
-.venv/bin/python main.py
+python tools/simulador_placa.py
+python main.py
 ```
 
-Depois de mostrar a recriação e **fechar o aplicativo**:
+Usar a porta impressa. `d` pressiona, `l` libera, `x` remove cabo e `q` encerra. `--falhar-inicio 115200` ensaia alvo alternativo. A simulação não comprova vazão física, DTR, ADC, D13 ou acionamento elétrico.
 
-```bash
-cp data/config.json "$pasta_backup_demo/config-padroes-gerado.json"
-cp "$pasta_backup_demo/config-original.json" data/config.json || exit 1
-cmp "$pasta_backup_demo/config-original.json" data/config.json || exit 1
-.venv/bin/python main.py
-```
+Ao terminar, solicitar corte e aguardar DAT se o combinado for deixar a carga desligada. Desconectar envia `!P`, que apenas pausa e retorna a 9600. Fechar o app deve liberar porta e drenar a fila SQLite sem destruir threads ativas.
 
-Preservar o diretório indicado por `pasta_backup_demo`. Se o primeiro `cp` do bloco de restauração falhar porque não houve recriação, ainda restaurar `config-original.json`. Não remover a pasta `data`, arquivos SQLite ou backups.
+## Arguição — respostas curtas
 
-## Perguntas prováveis da banca
-
-| Pergunta | Resposta técnica para ensaio |
+| Pergunta | Resposta |
 |---|---|
-| Onde está o MVC? | `views/` contém apresentação e sinais; `controllers/` coordena ações; `models/` contém domínio, protocolo, workers e repositórios. `ui/` contém Designer e código gerado. Mostrar o histórico e o Dashboard como exemplos da versão final integrada. |
-| Por que três threads? | A GUI precisa processar pintura e interação; a serial pode esperar bytes; o SQLite pode esperar disco/locks. As filas transferem pedidos e os sinais devolvem resultados. Não compartilhamos conexões SQLite entre essas threads. |
-| Uma subclasse de QThread faz todos os métodos rodarem em segundo plano? | Não. O objeto QThread pertence à thread que o criou. Aqui `run()` consome a fila; `executar()` só enfileira. Os callbacks são despachados por sinais na thread da GUI. |
-| Por que Signals e Slots? | Desacoplam emissores e receptores e permitem entrega enfileirada entre threads. Widgets são atualizados somente na GUI. O barramento distribui leituras, estados e eventos confirmados. |
-| Como evitam congelamento no histórico? | SQLite e conversão dos registros rodam no DatabaseWorker. A View cria células em lotes de 100 linhas; não recalcula a altura de todas as linhas. Notificações são agrupadas e consultam somente IDs novos, não o histórico inteiro. |
-| E se dois filtros responderem fora de ordem? | Cada solicitação pertence a uma revisão. Ao mudar o filtro, invalidamos os callbacks anteriores; resultados antigos não substituem a tabela atual. Ao fechar a tela, descartamos os callbacks e usamos referências fracas. |
-| Por que não identificar um evento pelo texto ou pelo horário? | Eventos distintos podem ter os mesmos valores. Usamos o ID persistido como identidade. Como `Evento` não carrega dispositivo, a consulta incremental traz a chave e a tag pelo LEFT JOIN, sem inferência pela descrição. |
-| Por que SQLite e LEFT JOIN? | SQLite é local e transacional, adequado ao protótipo. A chave estrangeira relaciona evento e dispositivo. LEFT JOIN preserva registros sem vínculo, inclusive quando a FK é colocada em NULL após remoção de dispositivo. SQL usa parâmetros. |
-| O que uma transação protege? | Na operação de corte, alterações de dispositivos e inserção do evento são confirmadas juntas. Em exceção antes do commit, rollback restaura o banco. A emissão de confirmação e o comando serial ocorrem após o commit; o efeito físico não é revertido pelo SQLite. |
-| WAL resolve qualquer concorrência? | Não. WAL favorece leitores enquanto há escrita, mas SQLite continua com restrições de escrita e pode falhar por lock/disco. Usamos timeout, transações e tratamento de erro; I/O demorado fica fora da GUI durante a operação das telas refatoradas. |
-| O que acontece quando uma proteção física atua e o banco falha? | O disjuntor já abriu. O app mostra ABERTO e informa falha de registro; não tenta fechar a carga para simular rollback. É um caso diferente de um comando ainda não enviado. |
-| Por que o handshake começa em 9600? | É a velocidade da placa após boot/reset e após `!P`. O alvo é pedido com `!S<baud>` e aceito com `ACK: INICIANDO`; a primeira amostra `DAT` válida confirma a nova velocidade. As opções são 9600, 19200, 38400 e 115200. |
-| O checksum garante segurança? | O XOR identifica parte dos erros acidentais e delimita pacotes inválidos; não autentica o host nem protege contra adulteração. Não há criptografia ou garantia de detectar todos os padrões de erro. |
-| Qual watchdog foi implementado? | O firmware do professor não tem watchdog. A detecção de queda é do desktop: sem amostras por 3 × intervalo + timeout, o `SerialWorker` declara Link perdido. Ao desconectar, o desktop envia `!P` para a placa parar e voltar a 9600. |
-| A reconexão é automática? | Não. O worker da conexão perdida termina. O operador reconecta/atualiza a porta e solicita outra conexão; nasce um novo worker que repete o handshake e alinha o relé ao estado persistido. |
-| Como encerram sem destruir QThread ativa? | Pedimos parada cooperativa; o banco drena pedidos anteriores à sentinela, e a serial percebe a interrupção no laço. `finished` liga a `deleteLater`; no encerramento o controller aguarda os workers com prazo e registra falhas. |
-| Por que recriar JSON não zera as regras? | Na base de referência, `limites_iniciais` semeia um banco novo; regras existentes estão no SQLite. A entrega #62 sincroniza os limites salvos com o JSON. Backup/restauração não deve apagar o banco. Conferir a versão integrada. |
-| O simulador comprova as quatro velocidades físicas? | Não. A pty valida protocolo e lógica de negociação, mas não a UART/USB real. Hardware exige upload, medidas, relé, botão, estabilidade e ensaios nas quatro velocidades no UNO. |
-| Quais são os limites da medição? | A montagem usa potenciômetros 0–5 V e escalas didáticas. O modo RMS tem constantes iniciais não calibradas. `V × I` não mede potência ativa exata com defasagem. Precisão e calibração exigem instrumento e ensaio físico. |
-| Como sabem quais testes foram feitos? | Cada evidência informa ambiente, commit, comando, resultado e operador. Compilação, teste automatizado, simulação e ensaio físico têm registros separados. Item pendente continua pendente até a execução. |
+| Por que três threads? | GUI processa interação; serial espera bytes; banco espera disco/locks. Sinais devolvem resultados à GUI. |
+| O intervalo muda Timer1? | Não. Aquisição fixa 200 Hz/5 ms; D13 100 Hz; intervalo só agrega no desktop. |
+| O ACK confirma desligamento? | Não. Somente RELE=0 em DAT confirma o estado reportado pela placa. |
+| Banco falhou com botão pressionado? | !0 já foi solicitado pela serial. O erro de persistência é informado; o estado depende de DAT. |
+| Rollback desfaz efeito físico? | Não. Nas operações manuais, falha antes do commit impede envio. Depois do envio, só telemetria confirma o efeito. |
+| Limite ultrapassado desliga? | Requisitos locais pedem alerta e auditoria; não há corte automático por limite. |
+| Soltar D11 religa? | Não. Exige LOW estável e novo pedido manual. |
+| Perder o cabo desliga? | Não é garantido. O firmware não tem watchdog; com alimentação própria, o relé pode permanecer ligado. |
+| O checksum garante tudo? | XOR detecta parte das corrupções; não autentica e não fornece segurança elétrica. |
+| O histórico guarda 200 amostras/s? | Guarda médias por janela e P=média(V)×média(I); eventos de limite incluem o máximo recebido. |
+| Há filas ilimitadas de medições? | Não. Agregados para GUI e leituras para SQLite têm limites e avisos de descarte. Tarefas de controle continuam preservadas. |
 
-## Ficha de ensaio da equipe
+## Checklist da apresentação
 
-| Ensaio | Ambiente / commit | Samuel | Davy | Lucas | Arthur | Total / ajustes | Evidência |
-|---|---|---|---|---|---|---|---|
-| Arduino real | Pendente | — | — | — | — | Meta 18:00; máximo 20:00 | Pendente |
-| Plano B | Pendente | — | — | — | — | Repetir os mesmos blocos e identificar simulação | Pendente |
+- [ ] Versão e resultados automatizados identificados no relatório final.
+- [ ] Ligações D11/D12 e D13 confirmadas por ensaio físico.
+- [ ] 200 Hz, 5 ms e 100 Hz explicados corretamente.
+- [ ] Botão inicial, durante religamento e falha SQLite ensaiados.
+- [ ] Relé confirmado por DAT, sem promessa de proteção independente.
+- [ ] Rollback manual/falha simulada demonstrados e modo restaurado.
+- [ ] Backup preservado, banco demonstrativo identificado e porta correta selecionada.
+- [ ] Ensaio físico distinguido de testes em memória e GUI offscreen.
+- [ ] Estado final da carga conferido antes de pausar e liberar a porta.
 
-Antes de encerrar o ensaio: configuração restaurada, backup preservado, modo de falha desligado, porta liberada e checklists atualizados somente com evidências reais.
+## Integração PR #80 — pontos preservados da main
+
+Mostrar PENDENTE, CONFIRMADO e FALHA no badge existente, com `SituacaoDisjuntor` separando intenção e DAT. Uma atuação perdida não confirma a carga e não repete comandos; se DAT continua ativo, o operador pode solicitar novamente. Sem comunicação, o estado reportado é desconhecido. Boot com relé aberto é status, não proteção atuada. A simulação permanece identificada e nunca fabrica confirmação serial offline.
+
+Na reconexão, intenção ABERTO com placa FECHADO permite uma única tentativa segura de corte. Nenhum religamento é automático. O botão físico tem prioridade mesmo sobre religamento aguardando commit; auditoria não bloqueia !0. Somente LOW estável e novo pedido manual permitem religar.
+
+No simulador, `b` continua gerando um pulso; `d` mantém e `l` libera D11. `--falhar-em` e `--falhar-inicio` exercitam falhas distintas. Consultar o relatório de resolução do merge para testes atuais e lista dos conflitos combinados.

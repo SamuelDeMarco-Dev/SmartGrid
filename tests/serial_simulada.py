@@ -30,6 +30,7 @@ class PlacaEmMemoria(PlacaVirtual):
         self.ack_incorreto = False
         self.silenciar_telemetria = False
         super().__init__(-1, caminho, **opcoes)
+        self.a0, self.a1 = 900, 256
 
     def iniciar(self):
         # Este transporte é temporizado pelos reads/writes, sem thread de pty.
@@ -40,7 +41,7 @@ class PlacaEmMemoria(PlacaVirtual):
 
     def _enviar(self, pacote: bytes) -> None:
         with self.condicao:
-            if self.silenciosa:
+            if self.silenciosa or (self.conexoes and self.conexoes[-1].baudrate != self.baud):
                 return
             if self.omitir_ack or self.ack_incorreto:
                 try:

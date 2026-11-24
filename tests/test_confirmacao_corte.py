@@ -392,15 +392,20 @@ def test_botao_da_placa_comanda_corte_e_exige_religamento_manual(app, cenario):
     eventos = RepositorioEventos().listar_todos()
     assert sum("Botão de proteção" in e.descricao for e in eventos) == 1
 
-    c.placa.pressionar_botao()  # já aberto: registra, mas não comanda de novo
+    c.placa.pressionar_botao()  # nova pressão: um novo corte seguro, sem religar
     assert esperar(app, lambda: sum(
         "Botão de proteção" in e.descricao for e in RepositorioEventos().listar_todos()
     ) == 2)
-    assert comandos_rele(c.placa) == ["0"]
+    assert esperar(app, lambda: not c.aplicacao.comando_pendente)
+    assert comandos_rele(c.placa) == ["0", "0"]
 
     c.dashboard.alternar_carga()
+    # A segunda pressão ainda está ativa: a integração deve bloquear !1.
+    assert comandos_rele(c.placa) == ["0", "0"]
+    assert esperar(app, lambda: not c.aplicacao.botao_pressionado)
+    c.dashboard.alternar_carga()
     assert esperar(app, lambda: c.dashboard.estado_disjuntor is FECHADO)
-    assert comandos_rele(c.placa) == ["0", "1"]
+    assert comandos_rele(c.placa) == ["0", "0", "1"]
 
 
 def test_confirmacoes_sucessivas_geram_um_evento_por_operacao(app, cenario):

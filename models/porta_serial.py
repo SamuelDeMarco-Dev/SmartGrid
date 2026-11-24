@@ -1,13 +1,7 @@
-"""Serviço simulado de conexão serial.
+"""Valida parâmetros e enumera portas; o I/O de conexão cabe ao SerialWorker.
 
-Na entrega A1/1 não existe I/O com o hardware: esta classe apenas guarda os
-parâmetros escolhidos na tela, valida-os e mantém o estado da conexão. A
-comunicação real com o microcontrolador entra na Unidade 4, substituindo o
-corpo de :meth:`PortaSerial.conectar` e :meth:`PortaSerial.desconectar` — a
-assinatura pública foi pensada para não mudar quando isso acontecer.
-
-Nada aqui importa PyQt6: o controller é quem traduz erro em ``QMessageBox`` e
-estado em rótulo colorido.
+Não importa Qt: o controller traduz os erros em mensagens da interface.
+O campo taxa_amostragem_ms é a janela de agregação no desktop.
 """
 
 from __future__ import annotations
@@ -20,7 +14,7 @@ from models.protocolo import INTERVALO_MAXIMO_MS, INTERVALO_MINIMO_MS, VELOCIDAD
 #: sempre começa em 9600 bps; o valor escolhido é a velocidade ALVO do handshake.
 BAUD_RATES = VELOCIDADES
 
-#: Faixa da taxa de amostragem (janela em que o desktop agrega as amostras).
+#: Faixa do intervalo de agregação no desktop; Timer1 fixo em 200 Hz.
 TAXA_AMOSTRAGEM_MINIMA_MS = INTERVALO_MINIMO_MS
 TAXA_AMOSTRAGEM_MAXIMA_MS = INTERVALO_MAXIMO_MS
 
@@ -75,7 +69,7 @@ class ParametrosConexao:
 
 
 class PortaSerial:
-    """Porta serial simulada: guarda parâmetros e estado, sem tocar hardware."""
+    """Guarda parâmetros/estado solicitados; o worker mantém a conexão real."""
 
     def __init__(self) -> None:
         self._parametros: ParametrosConexao | None = None
@@ -166,10 +160,10 @@ class PortaSerial:
     # ------------------------------------------------------------------
     @staticmethod
     def validar_taxa_amostragem(taxa_ms: int) -> int:
-        """Confere o intervalo de agregação das amostras da placa."""
+        """Confere o período da agregação no desktop; Timer1 fixo em 200 Hz."""
         if not TAXA_AMOSTRAGEM_MINIMA_MS <= taxa_ms <= TAXA_AMOSTRAGEM_MAXIMA_MS:
             raise ErroConexaoSerial(
-                f"Taxa de amostragem inválida: {taxa_ms} ms. "
+                f"Intervalo de agregação inválido: {taxa_ms} ms. "
                 f"Informe um valor entre {TAXA_AMOSTRAGEM_MINIMA_MS} e "
                 f"{TAXA_AMOSTRAGEM_MAXIMA_MS} ms."
             )

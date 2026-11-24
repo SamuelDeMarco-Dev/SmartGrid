@@ -127,11 +127,10 @@ def test_velocidade_sem_amostras_pausa_e_negocia_velocidade_menor_em_9600(
     try:
         aguardar_qt(lambda: len(leituras) > 0, segundos=8)
         assert list(velocidades) == [[38400]]
-        assert placa.escritas[:3] == [
-            (9600, b"!S115200\n"),
-            (115200, b"!P\n"),
-            (9600, b"!S38400\n"),
-        ]
+        assert placa.escritas[0] == (9600, b"!S115200\n")
+        assert (115200, b"!P\n") in placa.escritas
+        assert (9600, b"!S38400\n") in placa.escritas
+        # A recuperação sonda também os outros bauds: não pressupõe watchdog.
     finally:
         worker.parar()
         assert worker.wait(2000)

@@ -78,6 +78,22 @@ class ErroProtocolo(ValueError):
     """Linha malformada, corrompida ou incoerente com o protocolo."""
 
 
+class Comando(str, Enum):
+    INICIAR = "S"
+    PAUSAR = "P"
+    RELE = "RELE"
+    DAT = "DAT"
+    ACK = "ACK"
+    ERR = "ERR"
+
+
+@dataclass(frozen=True, slots=True)
+class Mensagem:
+    """Comando do host; também permite construir casos inválidos nos testes."""
+    comando: Comando
+    campos: tuple[str, ...] = ()
+
+
 class TipoResposta(Enum):
     """Respostas de texto ``>>> ACK|ERR: ... <<<`` da placa."""
 
@@ -95,6 +111,20 @@ class Resposta:
     baud: int | None = None
     texto: str = ""
 
+    @property
+    def comando(self) -> Comando:
+        return Comando.ERR if self.tipo is TipoResposta.ERRO else Comando.ACK
+
+    @property
+    def campos(self) -> tuple[str, ...]:
+        if self.tipo is TipoResposta.INICIANDO:
+            return ("S", str(self.baud))
+        if self.tipo is TipoResposta.PAUSADA:
+            return ("P",)
+        if self.tipo in (TipoResposta.RELE_LIGADO, TipoResposta.RELE_DESLIGADO):
+            return ("RELE", "1" if self.tipo is TipoResposta.RELE_LIGADO else "0")
+        return (self.texto,)
+
 
 @dataclass(frozen=True, slots=True)
 class Amostra:
@@ -104,6 +134,27 @@ class Amostra:
     a1: int
     rele_ligado: bool
     botao_pressionado: bool
+
+    @property
+    def comando(self) -> Comando:
+        return Comando.DAT
+
+    @property
+    def disjuntor_fechado(self) -> bool:
+        return self.rele_ligado
+
+    @property
+    def tensao(self) -> float:
+        return converter(self.a0, self.a1)[0]
+
+    @property
+    def corrente(self) -> float:
+        return converter(self.a0, self.a1)[1] if self.rele_ligado else 0.0
+
+
+# Nome público usado pela branch #80, com a mesma representação de DAT.
+Telemetria = Amostra
+PERIODO_AQUISICAO_S = PERIODO_AMOSTRA_S
 
 
 # ----------------------------------------------------------------------
@@ -137,6 +188,16 @@ def interpretar(linha: bytes | str) -> Amostra | Resposta | None:
         return _interpretar_amostra(linha)
     if linha.startswith(">>>"):
         return _interpretar_resposta(linha)
+    if linha == "!P":
+        return Mensagem(Comando.PAUSAR)
+    if linha in ("!0", "!1"):
+        return Mensagem(Comando.RELE, (linha[1],))
+    if re.fullmatch(r"!S\d+", linha):
+        baud = int(linha[2:])
+        validar_velocidade(baud)
+        return Mensagem(Comando.INICIAR, (str(baud),))
+    if linha.startswith("DAT,"):
+        raise ErroProtocolo("DAT sem enquadramento.")
     return None
 
 
@@ -144,7 +205,7 @@ def _interpretar_amostra(linha: str) -> Amostra:
     if SEPARADOR_CS not in linha:
         raise ErroProtocolo(f"Amostra sem checksum: {linha!r}.")
     corpo, _, recebido = linha[1:].rpartition(SEPARADOR_CS)
-    if recebido.upper() != checksum(corpo):
+    if not re.fullmatch(r"[0-9a-fA-F]{2}", recebido) or recebido.upper() != checksum(corpo):
         raise ErroProtocolo(f"Checksum inválido em {linha!r}.")
 
     nome, *campos = corpo.split(",")
@@ -152,6 +213,10 @@ def _interpretar_amostra(linha: str) -> Amostra:
         raise ErroProtocolo(f"Pacote desconhecido: {nome!r}.")
     if len(campos) != 4:
         raise ErroProtocolo("Amostra deve ter 4 campos.")
+    if not all(re.fullmatch(r"[0-9]+", campo) for campo in campos[:2]):
+        raise ErroProtocolo("ADC deve ser inteiro decimal sem sinal.")
+    if campos[2] not in ("0", "1") or campos[3] not in ("0", "1"):
+        raise ErroProtocolo("RELE e BOTAO devem ser 0 ou 1.")
     a0, a1, rele, botao = (_inteiro(campo) for campo in campos)
     if not (0 <= a0 <= ADC_MAXIMO and 0 <= a1 <= ADC_MAXIMO):
         raise ErroProtocolo(f"Contagem do ADC fora da faixa em {linha!r}.")
@@ -170,6 +235,7 @@ def _interpretar_resposta(linha: str) -> Resposta | None:
 
     iniciando = _INICIANDO.match(texto)
     if iniciando:
+        validar_velocidade(int(iniciando.group(1)))
         return Resposta(TipoResposta.INICIANDO, baud=int(iniciando.group(1)), texto=texto)
     if texto.startswith("CONVERSAO PAUSADA"):
         return Resposta(TipoResposta.PAUSADA, texto=texto)
@@ -273,12 +339,13 @@ def para_adc(tensao: float, corrente: float) -> tuple[int, int]:
 
 
 def validar_velocidade(baud: int) -> None:
-    if baud not in VELOCIDADES:
+    if isinstance(baud, bool) or not isinstance(baud, int) or baud not in VELOCIDADES:
         raise ErroProtocolo(f"Velocidade não suportada: {baud} bps.")
 
 
 def validar_intervalo(intervalo_ms: int) -> None:
-    if not INTERVALO_MINIMO_MS <= intervalo_ms <= INTERVALO_MAXIMO_MS:
+    if (isinstance(intervalo_ms, bool) or not isinstance(intervalo_ms, int)
+            or not INTERVALO_MINIMO_MS <= intervalo_ms <= INTERVALO_MAXIMO_MS):
         raise ErroProtocolo(
             f"Intervalo fora da faixa ({INTERVALO_MINIMO_MS}–"
             f"{INTERVALO_MAXIMO_MS} ms): {intervalo_ms}."
@@ -300,3 +367,24 @@ def _inteiro(texto: str) -> int:
         return int(texto)
     except ValueError:
         raise ErroProtocolo(f"Campo numérico inválido: {texto!r}.") from None
+
+
+def montar(tipo: Comando, *campos: object) -> bytes:
+    corpo = ",".join([tipo.value, *(str(c) for c in campos)])
+    return f"${corpo}*{checksum(corpo)}\n".encode("ascii")
+
+
+def telemetria(a0: int, a1: int, disjuntor_fechado: bool, botao: bool = False) -> bytes:
+    return montar(Comando.DAT, a0, a1, int(disjuntor_fechado), int(botao))
+
+
+def decodificar_telemetria(mensagem) -> Amostra:
+    if isinstance(mensagem, Amostra):
+        return mensagem
+    if not isinstance(mensagem, Mensagem) or mensagem.comando is not Comando.DAT:
+        raise ErroProtocolo("Esperado DAT.")
+    return _interpretar_amostra(montar(Comando.DAT, *mensagem.campos).decode().strip())
+
+
+def e_ack(mensagem, *esperado: str) -> bool:
+    return isinstance(mensagem, Resposta) and mensagem.comando is Comando.ACK and mensagem.campos[:len(esperado)] == esperado

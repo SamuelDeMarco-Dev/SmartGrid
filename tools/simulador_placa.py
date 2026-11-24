@@ -42,6 +42,8 @@ DURACAO_BOTAO_S = 0.2
 
 #: Máximo de amostras atrasadas enviadas de uma vez pelo laço da placa.
 RAJADA_MAXIMA = 5
+AGUARDANDO_LINK = "AGUARDANDO_LINK"
+TELEMETRIA = "TELEMETRIA"
 
 
 class PlacaVirtual:
@@ -54,17 +56,53 @@ class PlacaVirtual:
         *,
         falhar_em: tuple[int, ...] = (),
         periodo_amostra_s: float = protocolo.PERIODO_AMOSTRA_S,
+        falhar_inicio_em: tuple[int, ...] = (), perder_ack: bool = False,
+        boot_s: float = 0.0, rele_fechado: bool = False, botao_pressionado: bool = False,
     ) -> None:
         self.caminho = caminho
         self._fd = fd_mestre
         self._falhar_em = set(falhar_em)
         self._periodo_amostra_s = periodo_amostra_s
+        self._falhar_inicio_em = set(falhar_inicio_em)
+        self._perder_ack = perder_ack
+        self._pronta_em = time.monotonic() + boot_s
+        self.pacotes_recebidos = []
+        self.ignorar_rele = False
+        self.a0 = self.a1 = None
 
         #: Comandos já processados, sem o ``!`` (ex.: ``"S115200"``, ``"0"``).
         self.comandos_recebidos: list[str] = []
         self._parar = threading.Event()
         self._thread = threading.Thread(target=self._laco, daemon=True)
         self.reiniciar()
+        self.rele_fechado = rele_fechado
+        self.botao_pressionado = botao_pressionado
+        if botao_pressionado:
+            self._soltar_botao_em = float("inf")
+
+    @property
+    def estado(self) -> str:
+        return TELEMETRIA if self.conversao_habilitada else AGUARDANDO_LINK
+
+    @estado.setter
+    def estado(self, estado: str) -> None:
+        self.conversao_habilitada = estado == TELEMETRIA
+
+    @property
+    def _proxima_dat(self):
+        return self._proxima_amostra
+
+    @_proxima_dat.setter
+    def _proxima_dat(self, valor):
+        self._proxima_amostra = valor
+
+    def disparar(self) -> None:
+        self.botao_pressionado = True
+        self._soltar_botao_em = float("inf")
+
+    def liberar_botao(self) -> None:
+        self.botao_pressionado = False
+        self._soltar_botao_em = 0.0
 
     @classmethod
     def criar(cls, **opcoes) -> "PlacaVirtual":
@@ -109,7 +147,8 @@ class PlacaVirtual:
 
     def parar(self) -> None:
         self._parar.set()
-        self._thread.join(timeout=2)
+        if self._thread.is_alive():
+            self._thread.join(timeout=2)
         for fd in (self._fd, getattr(self, "_fd_escravo", None)):
             if fd is None:
                 continue
@@ -162,7 +201,19 @@ class PlacaVirtual:
                     self._buffer_cmd += c
 
     def _processar(self, cmd: str) -> None:
+        if time.monotonic() < self._pronta_em:
+            return
         self.comandos_recebidos.append(cmd)
+        try:
+            mensagem = protocolo.interpretar(protocolo.comando(cmd))
+        except protocolo.ErroProtocolo:
+            # O parser do host valida bauds; a placa deve responder ERR ao
+            # comando inválido, sem abortar seu laço de emulação.
+            mensagem = None
+        if mensagem is not None:
+            self.pacotes_recebidos.append(mensagem)
+        if cmd in ("0", "1") and self.ignorar_rele:
+            return
         if cmd[0] in "Ss":
             self._iniciar_conversao(cmd[1:])
         elif cmd.upper() in ("P", "STOP"):
@@ -191,8 +242,13 @@ class PlacaVirtual:
         if baud not in protocolo.VELOCIDADES:
             self._enviar(protocolo.resposta_baud_invalido())
             return
+        if baud in self._falhar_inicio_em:
+            self._enviar(protocolo.resposta_baud_invalido())
+            return
         # O ACK sai na velocidade atual; só depois a placa troca.
-        self._enviar(protocolo.resposta_iniciando(baud))
+        if not self._perder_ack:
+            self._enviar(protocolo.resposta_iniciando(baud))
+        self._perder_ack = False
         if baud != protocolo.VELOCIDADE_INICIAL:
             self.baud = baud
         self.conversao_habilitada = True
@@ -216,6 +272,10 @@ class PlacaVirtual:
             return  # enlace ruim nesta velocidade: nada chega ao desktop
         leitura = gerar_leitura()
         a0, a1 = protocolo.para_adc(leitura.tensao, leitura.corrente)
+        if self.a0 is not None:
+            a0 = self.a0
+        if self.a1 is not None:
+            a1 = self.a1
         self._enviar(protocolo.amostra(a0, a1, self.rele_fechado, self.botao_pressionado))
 
     def _enviar(self, pacote: bytes) -> None:
@@ -234,11 +294,12 @@ def main() -> int:
         default=[],
         help="velocidades em que as amostras não chegam (testa o fallback)",
     )
+    parser.add_argument("--falhar-inicio", type=int, nargs="*", default=[])
     args = parser.parse_args()
 
-    placa = PlacaVirtual.criar(falhar_em=tuple(args.falhar_em)).iniciar()
+    placa = PlacaVirtual.criar(falhar_em=tuple(args.falhar_em), falhar_inicio_em=tuple(args.falhar_inicio)).iniciar()
     print(f"Placa virtual pronta em: {placa.caminho}")
-    print("Comandos: b = pressionar o botão · x = arrancar o cabo · q = sair")
+    print("Comandos: b = pulso D11 · d = manter D11 · l = liberar · x = remover cabo · q = sair")
 
     estado_anterior = None
     try:
@@ -253,7 +314,11 @@ def main() -> int:
             if not prontos:
                 continue
             tecla = sys.stdin.readline().strip().lower()
-            if tecla == "b":
+            if tecla == "d":
+                placa.disparar()
+            elif tecla == "l":
+                placa.liberar_botao()
+            elif tecla == "b":
                 placa.pressionar_botao()
                 print("[placa] botão pressionado")
             elif tecla == "x":

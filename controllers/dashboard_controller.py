@@ -113,6 +113,9 @@ class DashboardController(QObject):
         self._banco.consulta_falhou.connect(self._ao_consulta_falhou)
         self._aplicacao.disparo_espontaneo.connect(self._ao_disparo_espontaneo)
         self._aplicacao.disparo_simulado.connect(self._ao_disparo_simulado)
+        self._aplicacao.botao_alterado.connect(self._ao_botao_alterado)
+        self._aplicacao.falha_persistencia.connect(self._avisar_falha_persistencia)
+        self._aplicacao.aviso_comunicacao.connect(self._avisar_comunicacao)
 
     # ------------------------------------------------------------------
     # Telemetria e proteção
@@ -140,7 +143,8 @@ class DashboardController(QObject):
         barramento.registrar_evento(
             TipoEvento.ALERTA,
             f"Limite de alerta ultrapassado: {avaliacao.violacoes[0].descricao}",
-            leitura.resumo(),
+            leitura.resumo() + " | " + "; ".join(
+                f"máximo {v.valor:.2f} {v.grandeza.unidade}" for v in avaliacao.violacoes),
         )
 
     def _ao_status_conexao(self, conectado: bool, descricao: str) -> None:
@@ -176,8 +180,11 @@ class DashboardController(QObject):
             dica = "Aguarde telemetria válida da placa."
         elif self._aplicacao.comando_pendente:
             dica = "Aguarde a confirmação do comando pendente."
+        bloqueado = self._aplicacao.botao_pressionado and self.estado_disjuntor is EstadoDisjuntor.ABERTO
+        if bloqueado:
+            dica = "Libere o botão antes de solicitar o religamento."
         self.view.habilitar_comandos(
-            corte=livre,
+            corte=livre and not bloqueado,
             disparo=livre and self.estado_disjuntor is EstadoDisjuntor.FECHADO,
             dica=dica,
         )
@@ -258,12 +265,16 @@ class DashboardController(QObject):
             or self._aplicacao.comando_pendente or self._confirmando
         ):
             return
+        if self.estado_disjuntor is EstadoDisjuntor.ABERTO and self._aplicacao.botao_pressionado:
+            self.view.avisar("Proteção", "Libere o botão antes de solicitar o religamento.")
+            return
         destino = self.estado_disjuntor.alternado()
+        contexto = self._aplicacao.contexto_operacao
         if self.estado_disjuntor.energizado:
             titulo = "Corte de emergência"
             pergunta = (
                 "Confirmar o CORTE DE EMERGÊNCIA da carga?\n\n"
-                "O comando RELE,0 será enviado. Aguarde a confirmação pela telemetria."
+                "O comando !0 será enviado. Aguarde a confirmação pela telemetria."
             )
         else:
             titulo = "Religar carga"
@@ -278,7 +289,10 @@ class DashboardController(QObject):
             self._atualizar_comandos()
         if not confirmado:
             return
-        # O diálogo tem seu próprio event loop: D2 ou a conexão podem ter
+        if contexto != self._aplicacao.contexto_operacao:
+            self.view.avisar("Operação cancelada", "A proteção ou a conexão mudou durante a confirmação.")
+            return
+        # O diálogo tem seu próprio event loop: D11 ou a conexão podem ter
         # mudado enquanto o operador decidia. Não reaproveita a confirmação.
         if self.estado_disjuntor is None or destino is not self.estado_disjuntor.alternado():
             return
@@ -304,7 +318,7 @@ class DashboardController(QObject):
             )
         self.view.avisar(
             "Proteção atuada",
-            "A proteção atuou e o disjuntor abriu.\n\nVerifique a instalação antes de religar a carga.",
+            "A telemetria confirmou o desligamento da carga.\n\nVerifique a instalação antes de religar a carga.",
         )
 
     def _ao_disparo_simulado(self, erro_gravacao: str) -> None:
@@ -317,3 +331,16 @@ class DashboardController(QObject):
             "Simulação registrada. O estado da placa é desconhecido sem telemetria válida."
         )
         self.view.avisar("Disparo simulado", mensagem)
+
+    @property
+    def _corte_em_andamento(self) -> bool:
+        return self._aplicacao.comando_pendente
+
+    def _ao_botao_alterado(self, _pressionado: bool) -> None:
+        self._atualizar_comandos()
+
+    def _avisar_falha_persistencia(self, erro: str) -> None:
+        self.view.avisar_erro("Falha de registro", "Falha ao persistir no SQLite; estado da carga depende de DAT.\n" + erro)
+
+    def _avisar_comunicacao(self, mensagem: str) -> None:
+        self.view.avisar("Comunicação serial", mensagem)

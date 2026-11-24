@@ -160,7 +160,7 @@
                 <bool>true</bool>
                </property>
                <property name="text">
-                <string>Tensão eficaz (V_RMS)</string>
+                <string>Tensão simulada (V)</string>
                </property>
               </widget>
              </item>
@@ -204,7 +204,7 @@
                 <bool>true</bool>
                </property>
                <property name="text">
-                <string>Corrente eficaz (I_RMS)</string>
+                <string>Corrente simulada (A)</string>
                </property>
               </widget>
              </item>

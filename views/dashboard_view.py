@@ -149,6 +149,11 @@ class DashboardView(QWidget, Ui_Dashboard):
             f"color: #FFFFFF; background-color: {cor}; border-radius: 4px;"
         )
 
+    def mostrar_sem_confirmacao(self, ultimo_estado: EstadoDisjuntor) -> None:
+        self.labelBadgeDisjuntor.setText(f"Disjuntor: SEM CONFIRMAÇÃO (último: {ultimo_estado.name})")
+        self.labelBadgeDisjuntor.setStyleSheet(f"background-color: {COR_INATIVA}; color: white;")
+        self.labelDetalheDisjuntor.setText("Estado atual da carga sem confirmação")
+
     def mostrar_disjuntor(self, estado: EstadoDisjuntor) -> None:
         self.labelBadgeDisjuntor.setText(estado.texto_indicador)
         self.labelBadgeDisjuntor.setStyleSheet(

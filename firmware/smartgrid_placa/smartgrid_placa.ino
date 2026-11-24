@@ -82,9 +82,9 @@ void processarComando(char* cmd) {
       baudSolicitado = strtoul(&cmd[1], NULL, 10);
     }
 
-    if (baudSolicitado == 9600 || baudSolicitado == 19200 ||
+    if (baudSolicitado == 9600 || baudSolicitado == 19200 || 
         baudSolicitado == 38400 || baudSolicitado == 115200) {
-
+      
       Serial.print(F(">>> ACK: INICIANDO EM "));
       Serial.print(baudSolicitado);
       Serial.println(F(" BPS <<<"));
@@ -136,7 +136,7 @@ void loop() {
       gravandoCmd = true;
       indiceCmd = 0;
       bufferCmd[0] = '\0';
-    }
+    } 
     else if (gravandoCmd) {
       if (c == '\n' || c == '\r') {
         if (indiceCmd > 0) {
@@ -145,7 +145,7 @@ void loop() {
         }
         gravandoCmd = false;
         indiceCmd = 0;
-      }
+      } 
       else if (indiceCmd < sizeof(bufferCmd) - 1) {
         if (c != ' ') {
           bufferCmd[indiceCmd++] = c;

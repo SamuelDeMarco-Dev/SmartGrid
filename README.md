@@ -77,13 +77,11 @@ O software supervisor recebe continuamente as amostras dos sensores do microcont
 6. Guarda a configuração da comunicação em **`data/config.json`** e registra a operação em **`logs/smartgrid.log`**;
 7. Mantém a serial e o banco em **threads próprias**, sem travar a interface.
 
-```
-┌──────────────────┐   Serial: 9600 → baud escolhido    ┌──────────────────────┐
-│  Arduino UNO     │  ── $DAT,A0,A1,relé,botão*CS ─────▶ │                      │
-│  (firmware do    │      (200 amostras/s)               │  SmartGrid Desktop   │
-│   professor,     │  ◀── !S<baud>, !1, !0, !P ───────── │  (IHM Supervisória)  │
-│   relé, botão)   │                                     │                      │
-└──────────────────┘                                     └──────────────────────┘
+```text
+Arduino UNO (potenciômetros, D11 e D12)
+    → $DAT,A0,A1,RELE,BOTAO*CS → SmartGrid Desktop
+    ← !S<baud>, !0, !1, !P    ← SmartGrid Desktop
+Boot em 9600; recomendado 115200; Timer1 fixo em 200 Hz.
 ```
 
 ---
@@ -102,19 +100,29 @@ O software supervisor recebe continuamente as amostras dos sensores do microcont
 
 ## Entrega A1/5 — Threads, Protocolo Serial e MVC
 
+Integração revisada em 23/11/2026 para o firmware obrigatório. A validação anterior permanece em [RELATORIO_VALIDACAO_FINAL.txt](RELATORIO_VALIDACAO_FINAL.txt). A integração com a main e os testes atuais estão em [RELATORIO_RESOLUCAO_MERGE_80.txt](RELATORIO_RESOLUCAO_MERGE_80.txt).
+
 Até a A1/2 a telemetria era gerada dentro da própria GUI. Na A1/5 o SmartGrid conversa de verdade com a placa (Arduino UNO ou placa virtual):
 
 - a **serial** e o **SQLite** rodam em threads próprias, e a thread da GUI só recebe sinais;
-- o link com a placa segue o **protocolo do firmware do professor**, com checksum nas amostras, início a 9600 bps, negociação de velocidade e detecção de queda no desktop;
+- o link com a placa segue um **protocolo próprio**, com checksum, handshake a 9600 bps, negociação de velocidade e detecção de queda pelo desktop (sem watchdog na placa);
 - todas as telas seguem **MVC estrito**: a View desenha, o Controller coordena e o Model guarda regras, protocolo e acesso a dados;
 - as medições são gravadas na tabela `leituras`, e o gráfico do Dashboard alterna entre **tempo real** e **histórico**.
+
+### Confirmação do disjuntor e integração da main (PR #80)
+
+Preservada a implementação D01 do PR #79: `SituacaoDisjuntor` separa `solicitado` (intenção persistida), `reportado` (DAT da conexão atual) e `ConfirmacaoDisjuntor`: DESCONHECIDO, PENDENTE, CONFIRMADO ou FALHA. Um commit/ACK não confirma atuação. Sem telemetria válida, `estado_disjuntor` é `None`; o badge existente mostra DESCONHECIDO. Telemetria contraditória retira a confirmação. Falha de atuação com DAT ainda ativo mantém o link utilizável, mostra FALHA e permite nova solicitação manual, sem repetição automática do comando.
+
+O botão físico conserva a prioridade implementada na branch: `!0` sai na serial sem esperar SQLite ou GUI, inclusive durante religamento que aguarda commit. A geração de proteção invalida pedidos antigos. Release exige 50 ms estáveis; depois ainda é necessária nova solicitação manual. O destino e contexto de uma confirmação modal são fixados antes do diálogo.
+
+A main também mantém o status de boot com relé aberto (sem falso aviso de proteção), simulação identificada, um resultado por comando e uma tentativa segura de corte na reconexão se a intenção persistida era ABERTO. Nenhuma conexão religa a carga automaticamente. Regressões dos dois lados são preservadas.
 
 ### As três threads
 
 | Thread | Classe | Responsabilidade |
 |---|---|---|
 | **GUI** (principal) | Views, controllers das telas, `AplicacaoController` | Desenhar, receber cliques e mostrar o que os workers devolvem. Nunca abre porta nem banco. |
-| **Serial** | `SerialWorker(QThread)` — `models/serial_worker.py` | Abre a porta a 9600 bps, envia `!S<baud>`, agrega as amostras `DAT` de 200 Hz no intervalo configurado, envia `!1`/`!0`, detecta o botão da placa e a queda do link. Um worker novo nasce a cada **Conectar**. |
+| **Serial** | `SerialWorker(QThread)` — `models/serial_worker.py` | Abre a porta a 9600 bps, faz o handshake, valida DAT, agrega médias e máximos, envia !0/!1, atende D11 e detecta a queda do link. Um worker novo nasce a cada **Conectar**. |
 | **Banco** | `DatabaseWorker(QThread)` — `models/database_worker.py` | Fila única de tarefas do SQLite: leituras em lote, eventos de auditoria, consultas históricas e qualquer operação de repositório pedida pelas telas. Existe durante toda a execução. |
 
 O `AplicacaoController` (`controllers/aplicacao_controller.py`) cria, liga e encerra os dois workers. Os sinais entre threads usam a conexão enfileirada do Qt, então todo slot que mexe em widget roda na thread da GUI.
@@ -144,95 +152,45 @@ flowchart LR
     D -- "callbacks e resultados" --> C
 ```
 
+**Proteção e filas:** D11 HIGH solicita !0 na própria serial, sem esperar SQLite/GUI; LOW estável por 50 ms libera somente um novo pedido manual. Religamentos pendentes são invalidados pela geração de proteção. As médias usam memória constante e os máximos de V/I/P preservam picos recebidos para alertas. A entrega à GUI limita-se a 1000 agregados e a fila do banco a 10000 leituras, com avisos/contadores de descarte e lotes de até 512. Tarefas de controle são preservadas e não têm limite fixo.
+
 **Sinais que cruzam as threads:**
 
 | Origem | Sinal | Destino | Para quê |
 |---|---|---|---|
 | `SerialWorker` | `estado_alterado(nome, detalhe)` | `AplicacaoController` → `barramento.estado_link_alterado` | Fase do link na tela serial; vira `status_conexao_alterado` e eventos de Status/Alerta |
-| `SerialWorker` | `velocidade_negociada(int)` | `AplicacaoController.velocidade_negociada` | Velocidade em que a primeira amostra `DAT` chegou, exibida na tela serial |
+| `SerialWorker` | `velocidade_negociada(int)` | `AplicacaoController.velocidade_negociada` | Velocidade confirmada por DAT válido, exibida na tela serial |
 | `SerialWorker` | `leitura_recebida(Leitura)` | `barramento` (Dashboard) e `DatabaseWorker.gravar_leitura` | Indicadores, gráfico em tempo real e tabela `leituras` |
-| `SerialWorker` | `disjuntor_reportado(EstadoDisjuntor)` | `AplicacaoController` | Confirmação dos comandos e abertura sem comando |
-| `SerialWorker` | `botao_acionado()` | `AplicacaoController` | Botão da placa pressionado: o desktop comanda o corte (`!0`) |
+| `SerialWorker` | `disjuntor_reportado(EstadoDisjuntor)` | `AplicacaoController` | Estado real do relé confirmado por DAT |
+| `SerialWorker` | `botao_alterado(bool)` | `AplicacaoController` | Bloqueio do religamento e auditoria; !0 já foi solicitado na thread serial |
 | `SerialWorker` | `link_perdido(motivo)` | `AplicacaoController` | Cabo removido, porta sumiu ou silêncio da placa |
-| GUI | `enviar_rele(fechado)` | fila de comandos do `SerialWorker` | `!0`/`!1` depois do corte ou religamento confirmado no banco |
+| GUI | `enviar_rele(fechado)` | fila de comandos do `SerialWorker` | `!0`/`!1` após commit manual; confirmação física somente por DAT |
 | GUI | `executar(funcao, ..., ao_concluir, ao_falhar)` | fila do `DatabaseWorker` | Regras, histórico, `config.json`, descoberta de portas e corte emergencial fora da GUI |
 | `DatabaseWorker` | `leituras_consultadas(filtro, lista)` / `consulta_falhou(msg)` | `DashboardController` | Gráfico em modo histórico |
 | `DatabaseWorker` | `barramento.evento_persistido(Evento)` | `HistoricoController` | Linha nova no histórico, só depois do COMMIT |
 
-**Encerramento cooperativo:** ao fechar a janela, `QApplication.aboutToQuit` chama `AplicacaoController.encerrar()`. Ele pede `parar()` à serial (que envia `!P` e fecha a porta), espera a thread com `wait()`, e só então para o banco, que grava o que ainda estava na fila antes de sair. Todo worker tem `finished` ligado a `deleteLater`.
+**Encerramento cooperativo:** ao fechar a janela, `QApplication.aboutToQuit` chama `AplicacaoController.encerrar()`. Ele pede `parar()` à serial (que envia `!P` e fecha a porta, preservando o relé), espera a thread com `wait()`, e só então para o banco, que grava o que ainda estava na fila antes de sair. Todo worker tem `finished` ligado a `deleteLater`.
 
 ### Protocolo serial
 
-O firmware da placa é o fornecido pelo professor (`firmware/smartgrid_placa/smartgrid_placa.ino`) e **não é alterado**. O desktop se adapta a ele em `models/protocolo.py` (Python puro, sem Qt e sem pyserial); a placa virtual `tools/simulador_placa.py` reproduz o mesmo comportamento.
 
-**Desktop → placa** — comandos de texto `!<CMD>` terminados em `\n` (a placa ignora espaços):
+| Comando/pacote | Significado |
+|---|---|
+| `!S9600`, `!S19200`, `!S38400`, `!S115200` + LF | Inicia aquisição na velocidade escolhida |
+| `>>> ACK: INICIANDO EM 115200 BPS <<<` | ACK textual na velocidade anterior, antes da troca |
+| `$DAT,A0,A1,RELE,BOTAO*CS` + CRLF | Dados brutos, estados 0/1 e checksum XOR dos bytes de `DAT,...` |
+| `!1` + LF | Liga a carga |
+| `!0` + LF | Desliga a carga |
+| `!P` + LF | Pausa aquisição e retorna a 9600; preserva o relé |
+| `>>> ACK: RELE LIGADO <<<` / `>>> ACK: RELE DESLIGADO <<<` | Recepção do comando; a posição é confirmada somente pelo próximo DAT |
+| `>>> ERR: ... <<<` | Erro textual; não substitui DAT |
 
-| Comando | Resposta da placa | Significado |
-|---|---|---|
-| `!S<baud>` | `>>> ACK: INICIANDO EM <baud> BPS <<<` (ainda na velocidade antiga) ou `>>> ERR: BAUD INVALIDO... <<<` | Inicia a conversão e troca para `<baud>` |
-| `!1` | `>>> ACK: RELE LIGADO <<<` | Liga o relé: carga energizada (religamento) |
-| `!0` | `>>> ACK: RELE DESLIGADO <<<` | Desliga o relé: corte |
-| `!P` | `>>> ACK: CONVERSAO PAUSADA. RETORNANDO A 9600 BPS <<<` | Para a conversão e volta a 9600 bps |
+DAT aceita LF ou CRLF, ADC inteiro na faixa 0–1023, RELE e BOTAO estritamente 0/1. Pacotes inválidos são descartados e contados. O protocolo anterior com `$HS`, `$SYNC`, `$TLM`, `$PING` e `$BYE` não é utilizado.
 
-**Placa → desktop** — com a conversão ligada, o Timer1 (`OCR1A = 1249`, prescaler 64) amostra a **200 Hz** e cada amostra sai numa linha:
+O desktop abre em 9600 e tolera até 6 s para o boot/reset por DTR. Envia `!S<alvo>`, aguarda o ACK e testa DAT na velocidade alvo mesmo se o ACK se perder. Fragmentos da velocidade anterior são descartados. Se não houver DAT, envia `!P` nas quatro velocidades possíveis para recuperar uma placa que continuou transmitindo; então tenta novamente a partir de 9600 e pode tentar alvos menores. Não depende de retorno automático a 9600. A recuperação pode levar vários segundos e pode ser cancelada pela interface.
 
-```text
-$DAT,<A0>,<A1>,<rele>,<botao>*CS\r\n
-```
+O firmware não tem watchdog. `!S9600` durante transmissão em outra velocidade também não força a troca para 9600; a recuperação usa `!P`. Silêncio de DAT por `max(0,5 s, timeout configurado)` ou erro de porta encerra o worker e mostra **Link perdido**. ACK/ERR não mantêm artificialmente o link ativo. Reconexão é manual, com novo worker e sem religar a carga automaticamente.
 
-- `A0`/`A1` são contagens do ADC (0–1023); `rele` é 1 com o relé ligado; `botao` é 1 com o botão em D11 pressionado;
-- `CS` é o **XOR dos bytes entre `$` e `*`**, em dois dígitos hexadecimais maiúsculos;
-- amostra com checksum errado, campos fora da faixa ou resposta `>>>` malformada é **descartada** e contada em `SerialWorker.pacotes_descartados`, sem derrubar o link. O banner que a placa imprime ao ligar é ignorado.
-
-**O que o desktop faz com as amostras:** converte as contagens em volts e ampères (`TENSAO_FUNDO_ESCALA = 250 V` e `CORRENTE_FUNDO_ESCALA = 20 A` para 1023 contagens) e publica **uma leitura por intervalo** (`taxa_amostragem_ms`, 100–5000 ms) com a média da janela e o estado do relé da última amostra. Com o relé desligado, a corrente publicada é zero. A borda de subida do botão (com debounce de 50 ms) vira `botao_acionado`: o firmware só reporta o botão, então é o desktop que envia `!0`.
-
-Velocidades aceitas: **exatamente 9600, 19200, 38400 e 115200 bps**. A conexão **sempre começa em 9600**, a velocidade da placa ao ligar e depois do `!P`. O valor escolhido na tela é a velocidade *alvo*. A 9600 bps a serial não comporta as 200 linhas por segundo e parte das amostras se perde na placa; prefira 38400 ou 115200.
-
-**Sequência da conexão:**
-
-```mermaid
-stateDiagram-v2
-    [*] --> EmEspera
-    EmEspera: Placa em espera (9600 bps, relé desligado, banner)
-    Handshake: Handshake a 9600 bps
-    TrocaVelocidade: Troca para a velocidade alvo
-    Telemetria: Telemetria ativa
-    LinkPerdido: Link perdido
-
-    EmEspera --> Handshake: desktop abre a porta e repete !S<baud>
-    Handshake --> TrocaVelocidade: ACK INICIANDO EM <baud> BPS
-    Handshake --> Handshake: ERR ou sem ACK no prazo, tenta a velocidade menor
-    Handshake --> LinkPerdido: nenhuma velocidade respondeu
-    TrocaVelocidade --> Telemetria: primeira amostra DAT válida
-    TrocaVelocidade --> Handshake: sem amostra em 1 s, desktop envia !P e tenta a velocidade menor
-    Telemetria --> Telemetria: DAT a 200 Hz, !1/!0 e ACK RELE
-    Telemetria --> EmEspera: !P ao desconectar
-    Telemetria --> LinkPerdido: cabo removido ou silêncio acima de 3 x intervalo + timeout
-    LinkPerdido --> [*]
-```
-
-| Situação | Tempo | Quem decide | Resultado |
-|---|---|---|---|
-| `!S` sem `ACK` (ou com `ERR`) | 6 s até o primeiro `ACK`, porque o UNO reinicia quando a porta abre; 3 s depois disso | `SerialWorker` | Tenta a próxima velocidade menor |
-| Nenhuma amostra na velocidade nova | 1 s | `SerialWorker` | Envia `!P` (a placa volta a 9600) e recomeça com a velocidade menor |
-| Placa em silêncio durante a telemetria | 3 × intervalo + timeout | `SerialWorker` | **Link perdido** |
-
-A placa não tem watchdog: se o desktop sumir sem enviar `!P`, ela continua transmitindo até ser reiniciada. Abrir a porta de novo reinicia o UNO pelo DTR.
-
-**Estado do relé ao conectar:** o firmware liga com o relé **desligado**, e o UNO reinicia a cada conexão. O desktop registra esse estado como status ("Placa iniciou com o relé desligado"), sem aviso de proteção e **sem religar sozinho**: o operador religa a carga pelo Dashboard.
-
-**O que a tela Comunicação Serial mostra** (`EstadoLink`, em `models/estado_link.py`):
-
-| `EstadoLink` | Rótulo na tela | Cor | Formulário |
-|---|---|---|---|
-| `DESCONECTADO` | Desconectado | cinza | editável |
-| `ABRINDO_PORTA` | Abrindo porta | azul | travado |
-| `HANDSHAKE` | Handshake a 9600 bps | azul | travado |
-| `NEGOCIANDO` | Negociando velocidade | âmbar | travado |
-| `TELEMETRIA` | Telemetria ativa + velocidade negociada | verde | travado |
-| `LINK_PERDIDO` | Link perdido + motivo | vermelho | editável, pronto para reconectar |
-
-Não há reconexão automática. Depois de **Link perdido**, o operador confere o cabo, atualiza as portas e clica **Conectar**, o que cria um `SerialWorker` novo.
 
 ### Padrão MVC por camada
 
@@ -298,15 +256,15 @@ erDiagram
 
 | Tabela | Novidade na A1/5 |
 |---|---|
-| `leituras` | Cada leitura publicada pelo `SerialWorker` (média das amostras `DAT` de um intervalo) vira uma linha, com `potencia = tensao × corrente`. O `DatabaseWorker` grava as leituras acumuladas na fila numa única transação. O índice por `data_hora` atende às consultas do gráfico: **últimas N leituras** ou **intervalo de data/hora**. |
+| `leituras` | Cada janela agregada vira uma linha, com `potencia = tensao × corrente`. O `DatabaseWorker` grava as leituras acumuladas na fila numa única transação. O índice por `data_hora` atende às consultas do gráfico: **últimas N leituras** ou **intervalo de data/hora**. |
 | `eventos` | Corte, religamento e disparo espontâneo gravam `dispositivo_id`. O Histórico mostra e filtra essa coluna; eventos sem vínculo aparecem como **Sem dispositivo**. |
 
-### Novos campos do `config.json`
+### Campos de aquisição do `config.json`
 
 | Chave | Padrão | Regra | Quem grava |
 |---|---|---|---|
 | `baud_rate` | `115200` | **apenas** 9600, 19200, 38400 ou 115200 (velocidade alvo) | Tela serial, a cada conexão |
-| `taxa_amostragem_ms` | `1000` | inteiro de 100 a 5000: intervalo em que o desktop agrega as amostras da placa | Tela serial, a cada conexão |
+| `taxa_amostragem_ms` | `1000` | inteiro de 100 a 5000: janela de médias no desktop; Timer1 fixo em 200 Hz | Tela serial, a cada conexão |
 | `limites_iniciais.tensao` / `.corrente` | `230.0` / `15.0` | números maiores que zero | Diálogo de limites, ao salvar as regras |
 
 ```json
@@ -324,7 +282,7 @@ erDiagram
 }
 ```
 
-A taxa de amostragem é editada na tela **Comunicação Serial**, validada antes de conectar e aplicada já na conexão pedida. Ler e gravar o JSON acontece no `DatabaseWorker`, fora da GUI.
+A janela de agregação é editada na tela **Comunicação Serial**, validada antes de conectar e aplicada já na conexão pedida. Ler e gravar o JSON acontece no `DatabaseWorker`, fora da GUI.
 
 ### Roteiro do seminário
 
@@ -400,9 +358,11 @@ Todo método que escreve aceita um parâmetro opcional `conn`: com ele, particip
 - `HistoricoView` publica filtros e ações; `HistoricoController` (`QObject`) consulta e limpa pelo `DatabaseWorker.executar()` compartilhado. Tipo, data inicial e dispositivo são combináveis; o `LEFT JOIN` preserva eventos sem dispositivo. A tabela é somente leitura e preenchida em lotes de 100 linhas, sem medir todas as células a cada atualização.
 - Eventos gerados na tela (corte emergencial, alarme de limite, disparo do disjuntor, conexão serial) são publicados no barramento e gravados pelo `DatabaseWorker` ou pela transação do serviço de corte. Só depois do commit é emitido `evento_persistido`. O histórico agrupa essas notificações por 150 ms e busca apenas os IDs posteriores ao snapshot, com o dispositivo real do banco. Não repete a consulta completa a cada evento nem altera o contrato de `Evento`.
 - Respostas de filtros antigos são descartadas; o fechamento da tela solta seus callbacks sem cancelar gravações já enfileiradas. Limpar exige confirmação visual, desabilita o botão durante a operação e informa sucesso ou erro.
-- O dashboard restaura o estado do disjuntor a partir de `dispositivos` ao abrir.
+- O dashboard mantém a intenção de `dispositivos` separada do estado reportado e mostra DESCONHECIDO até receber DAT válido.
 
 ### Transações atômicas e tratamento de erros
+
+Na conexão real, o commit registra a solicitação manual e autoriza enviar `!0`/`!1`; não confirma a posição física. A interface aguarda RELE em DAT. O botão D11 envia `!0` na própria thread serial antes de qualquer tentativa de persistência. Falha no SQLite não impede esse corte; a confirmação continua dependendo de DAT. O modo de falha simulada e o rollback das operações manuais permanecem preservados.
 
 `Database.transacao()` é o gerenciador de contexto (`with`) usado em toda escrita:
 
@@ -415,7 +375,7 @@ with Database.transacao() as conn:   # BEGIN
 
 Ele cumpre o papel do `with conn:` do `sqlite3`, com `BEGIN`, `COMMIT` e `ROLLBACK` explícitos.
 
-**Corte emergencial "tudo ou nada"** (`models/servico_corte.py`, `ServicoCorteEmergencial`), numa única transação:
+**Solicitação manual de corte/religamento "tudo ou nada" no SQLite** (`models/servico_corte.py`, `ServicoCorteEmergencial`), numa única transação:
 
 1. `UPDATE` de `DISJ-01` e `RELE-01` para `ABERTO` (ou `FECHADO`, no religamento);
 2. ponto de injeção de falha do [modo de falha simulada](#modo-de-falha-simulada-demonstração-do-rollback);
@@ -428,7 +388,7 @@ Se qualquer passo falhar, nada é gravado: os dispositivos continuam como estava
 | Tela | Entradas recusadas |
 |---|---|
 | Diálogo de Limites | nome vazio ou duplicado, limite vazio, **letras em campo numérico**, valor negativo ou zero |
-| Comunicação Serial | porta não selecionada, timeout vazio, com letras, negativo ou fora de 100 a 10 000 ms; taxa de amostragem fora de 100 a 5000 ms |
+| Comunicação Serial | porta não selecionada, timeout vazio, com letras, negativo ou fora de 100 a 10 000 ms; intervalo de agregação fora de 100 a 5000 ms |
 | Histórico | data inicial de filtro inválida |
 
 Erros de banco (`sqlite3.Error`) e de disco são capturados nos controllers, viram `QMessageBox.critical` e `[ERROR]` no log, e a interface não quebra com traceback. Nenhum `except: pass` é usado.
@@ -535,6 +495,8 @@ Os três cenários exigidos na demonstração, executando o código clonado do G
 
 ### 2. Painel de Configuração da Comunicação Serial
 
+Nota da integração final: a lista operacional é 9600, 19200, 38400 e 115200 bps. A opção 57600 do enunciado inicial não é suportada pelo firmware obrigatório.
+
 - Seleção de **Porta COM** (`QComboBox`);
 - **Baud Rate** (9600, 115200, além de 19200, 38400 e 57600);
 - **Timeout** em milissegundos;
@@ -564,13 +526,15 @@ Os três cenários exigidos na demonstração, executando o código clonado do G
 
 ## Entrega Final (Dezembro) — Requisitos Funcionais
 
+No protótipo obrigatório, o botão D11 informa uma solicitação: o desktop envia `!0` e confirma por DAT. O botão depende do software e da serial; não é proteção elétrica independente. Os limites abaixo são alertas, sem corte automático. A calibração é A0 × 250/1023 V e A1 × 20/1023 A (zero A com RELE=0); não se calcula RMS.
+
 ### 1. Processamento e Apresentação de Telemetria (Hardware → Desktop)
 
 O software recebe continuamente as amostras brutas dos sensores do microcontrolador.
 
 **Leitura e Tratamento de Tensão (V) e Corrente (A)**
 
-- Ler a **tensão eficaz (V<sub>RMS</sub>)** e a **corrente (I<sub>RMS</sub>)** enviadas pelo sensor (ex.: **ACS712** para corrente / **ZMPT101B** para tensão).
+- O enunciado original previa sensores reais (ACS712/ZMPT101B e grandezas RMS). O firmware obrigatório desta bancada transmite ADC de potenciômetros; a implementação usa a conversão linear documentada, sem cálculo RMS.
 
 **Cálculo da Potência Ativa (P)**
 
@@ -702,7 +666,7 @@ Nenhum controller importa outro controller. As telas conversam por sinais public
 | `leitura_recebida(Leitura)` | `AplicacaoController` (vinda do `SerialWorker`) | Dashboard (indicadores e gráfico) |
 | `evento_registrado(Evento)` | Qualquer tela (pedido de gravação) | `DatabaseWorker` |
 | `evento_persistido(Evento)` | `DatabaseWorker` e serviço de corte, **após o COMMIT** | Histórico de Eventos |
-| `estado_disjuntor_alterado(EstadoDisjuntor)` | Serviço de corte / disjuntor reportado pela placa | Dashboard (badge e comandos) e `AplicacaoController` (`RELE` para a placa) |
+| `estado_disjuntor_alterado(EstadoDisjuntor)` | Serviço de corte / disjuntor reportado pela placa | Dashboard (badge e comandos) e `AplicacaoController` (corte; religamento pelo fluxo manual protegido) |
 | `regras_alteradas(list[RegraAlerta])` | Diálogo de Limites | Dashboard (proteção por setpoint) |
 | `status_conexao_alterado(bool, str)` | `AplicacaoController` | Janela principal e Dashboard |
 | `estado_link_alterado(str, str)` | `AplicacaoController` (vindo do `SerialWorker`) | Tela Comunicação Serial (fases do handshake) |
@@ -840,51 +804,33 @@ python main.py
 
 ### Com o Arduino UNO (bancada)
 
-O passo a passo completo, com lista de materiais, ligações e calibração, está em [`docs/bancada.md`](docs/bancada.md). Em resumo:
+Seguir [docs/bancada.md](docs/bancada.md): A0/A1 nos potenciômetros; D11 Active HIGH com pull-down externo; D12 relé Active LOW; D13 sinal de 100 Hz. O firmware obrigatório deve permanecer intacto.
 
-1. Na Arduino IDE, abrir `firmware/smartgrid_placa/smartgrid_placa.ino`, selecionar a placa **Arduino Uno** e a porta, e usar **Upload/Carregar**. O D13 é a saída para o osciloscópio: fica em nível baixo até a conversão começar e depois oscila a 100 Hz.
-2. **Fechar o Monitor Serial da IDE**, que ocupa a porta.
-3. Abrir o SmartGrid (`python main.py`) e ir em **Comunicação Serial**.
-4. Clicar **Atualizar portas** e escolher a porta da placa (`COM3` no Windows, `/dev/ttyACM0` no Linux, `/dev/cu.usbmodem...` no macOS).
-5. Escolher a velocidade alvo (9600, 19200, 38400 ou 115200), o timeout e a taxa de amostragem, e clicar **Conectar**.
-6. Acompanhar as fases: Abrindo porta → Handshake a 9600 bps → Negociando velocidade → **Telemetria ativa**. A velocidade negociada aparece logo abaixo. Ao conectar, a carga aparece **ABERTO** (o firmware liga com o relé desligado): use **Religar carga** no Dashboard.
+1. Carregar o firmware no UNO e fechar o Monitor Serial.
+2. Executar `python main.py`; atualizar as portas e selecionar a porta real.
+3. Selecionar preferencialmente **115200 bps**, timeout de 1000 ms e intervalo de agregação de 1000 ms.
+4. Conectar: abertura → início em 9600 → `!S115200`/ACK textual → DAT válido na velocidade alvo. O UNO inicia com relé aberto e o desktop não envia religamento automático.
+5. Solicitar religamento manual com D11 liberado. Variar os potenciômetros e conferir médias, picos nos alertas e histórico SQLite.
+6. Antes de terminar, cortar manualmente se desejar deixar a carga desligada, aguardar confirmação DAT e então desconectar. `!P` preserva o relé.
 
-Para ver a detecção de queda, arranque o cabo USB com a telemetria ativa: a tela mostra **Link perdido** e libera o formulário. Recoloque o cabo, clique **Atualizar portas** e **Conectar** de novo.
+Timer1 adquire a cada 5 ms (200 Hz); D13 alterna e produz 100 Hz. Mudar a agregação não altera essas frequências. Perda de comunicação invalida o estado reportado e mostra DESCONHECIDO; reconexão é manual e não religa a carga.
 
 ### Sem hardware (placa virtual)
 
-`tools/simulador_placa.py` emula o Arduino num pseudoterminal (pty), com o mesmo comportamento do firmware do professor. Ele roda em **Linux e macOS**. No Windows, use uma distribuição Linux no **WSL 2 com WSLg** e rode o app e o simulador dentro dela (detalhes em [`docs/bancada.md`](docs/bancada.md#plano-b--placa-virtual)).
-
-Terminal 1, a partir da raiz do projeto:
+Em Linux/macOS, ou no WSL com app e simulador no mesmo ambiente:
 
 ```bash
 python tools/simulador_placa.py
-```
-
-O simulador imprime o caminho da porta virtual, por exemplo `/dev/pts/3` no Linux ou `/dev/ttys004` no macOS. Deixe esse terminal aberto.
-
-Terminal 2, no mesmo ambiente:
-
-```bash
 python main.py
 ```
 
-Em **Comunicação Serial**, digite no campo de porta o caminho impresso pelo simulador (o campo é editável), escolha a velocidade e clique **Conectar**. No terminal do simulador, digite a letra e tecle Enter:
-
-| Entrada | Efeito |
-|---|---|
-| `b` | Pressiona o botão da placa: o app comanda o corte (`!0`) e avisa que a proteção atuou |
-| `x` | Arranca o "cabo": fecha a pty e o app deve mostrar **Link perdido** |
-| `q` | Encerra o simulador |
-
-Para demonstrar a queda para uma velocidade menor, inicie o simulador sem amostras em 115200 e conecte escolhendo 115200. O desktop envia `!P` e a negociação termina em 38400:
+Digitar no app a porta impressa pelo simulador. Comandos do terminal: `d` pressiona o botão, `l` libera, `x` remove o cabo, `q` encerra. O simulador envia DAT; o desktop é quem envia `!0`. Para ensaiar velocidades alternativas:
 
 ```bash
-python tools/simulador_placa.py --falhar-em 115200
+python tools/simulador_placa.py --falhar-inicio 115200
 ```
 
-A placa virtual valida a sequência de pacotes e os estados, mas não lê potenciômetros, não aciona relé e não impõe baud rate elétrico. Os valores de telemetria são sintéticos.
-
+Os testes de transporte em memória também rodam no Windows. PTY e simulação não validam baud elétrico, DTR, ADC, alimentação, osciloscópio ou relé físico. O roteiro de bancada distingue esses ensaios.
 
 ### Testes e auditoria SQL
 
@@ -903,12 +849,14 @@ Os testes usam banco, configuração e log em pastas temporárias: não alteram 
 | `tests/test_transacoes.py` | Rollback de dispositivos e eventos, gravação conjunta e limpeza atômica do histórico |
 | `tests/test_config_manager.py` | Criação do `config.json`, JSON corrompido, campos inválidos e gravação atômica |
 | `tests/test_serial_config_controller.py` | Tela serial em MVC: configuração no JSON, timeout e taxa de amostragem, fases do handshake, velocidade negociada, Link perdido e reconexão |
-| `tests/test_protocolo.py` | Comandos `!`, amostras `$DAT*CS`, respostas `>>>`, conversão do ADC e placa virtual *(pty: Linux/macOS)* |
-| `tests/test_serial_worker.py` | `!S`, fallback de velocidade com `!P`, relé, botão da placa, `!P` ao desconectar e cabo arrancado |
-| `tests/test_resiliencia_serial.py` | Silêncio, checksum inválido, banner no meio da telemetria, velocidade sem amostras e `ACK` malformado sem derrubar o link |
+| `tests/test_protocolo.py` | Enquadramento `$CORPO*CS`, checksum e máquina de estados da placa virtual *(pty: Linux/macOS)* |
+| `tests/test_serial_worker.py` | Início por !S, DAT, velocidades alternativas, !0/!1, !P e cabo removido |
+| `tests/test_protecao_fisica.py` | Prioridade de !0, botão inicial e durante religamento, falha SQLite, rollback manual e confirmação pela placa |
+| `tests/test_aquisicao.py` | Médias, transições do relé, picos e limites das filas |
+| `tests/test_resiliencia_serial.py` | Boot lento, ACK perdido, DAT inválido, recuperação nas quatro velocidades e perda de link |
 | `tests/test_database_worker.py` | Fila do `DatabaseWorker`, leituras em lote, consultas e callbacks na GUI |
 | `tests/test_concorrencia.py` | 1 000 leituras com o event loop livre, consultas fora da GUI e encerramento em até 2 s |
-| `tests/test_aplicacao_controller.py` | Fiação dos workers: telemetria nas telas e no banco, corte → `!0`, botão da placa e encerramento |
+| `tests/test_aplicacao_controller.py` | Fiação dos workers: telemetria nas telas e no banco, corte → !0, solicitação D11, confirmação DAT e encerramento |
 | `tests/test_dashboard.py` | Proteção no Model e gráfico em tempo real e histórico |
 | `tests/test_limites_dialog.py` | Diálogo de limites em MVC, validação e gravação assíncrona |
 | `tests/test_historico.py` | Histórico em MVC, filtros, callbacks e carga de milhares de eventos |
@@ -933,13 +881,13 @@ rg -n '(SELECT|INSERT|UPDATE|DELETE).*%\s*(\(|[A-Za-z_])' -g '*.py' .
 | Comunicação serial fora da thread da GUI | `SerialWorker(QThread)`, um por conexão, criado pelo `AplicacaoController` |
 | Banco fora da thread da GUI (gravações e consultas) | `DatabaseWorker(QThread)` com fila de tarefas e `executar(..., ao_concluir, ao_falhar)` |
 | Nenhum I/O na GUI: regras, histórico, `config.json`, portas e corte | Todas as telas usam o `DatabaseWorker`; auditado em `tests/test_arquitetura.py` |
-| Encerramento cooperativo das threads | `parar()` + `wait()` no `aboutToQuit`; `finished → deleteLater`; `!P` para a placa |
-| Protocolo com enquadramento e checksum | Amostras `$DAT,...*CS` com XOR, tratadas em `models/protocolo.py`; linhas inválidas descartadas e contadas |
-| Handshake sempre a 9600 bps e negociação entre 9600, 19200, 38400 e 115200 | `!S<baud>` a 9600 → `ACK: INICIANDO` → troca de velocidade → primeira amostra `DAT`; sem amostras, `!P` e fallback para a velocidade menor |
-| Detecção de queda de link | Cabo removido ou silêncio acima de 3 × intervalo + timeout → **Link perdido** (o firmware do professor não tem watchdog) |
+| Encerramento cooperativo das threads | `parar()` + `wait()` no `aboutToQuit`; `finished → deleteLater`; `!P` para a placa; drena os agregados e o banco |
+| Protocolo com enquadramento e checksum | `$CORPO*CS` com XOR em `models/protocolo.py`; pacotes inválidos descartados e contados |
+| Handshake sempre a 9600 bps e negociação entre 9600, 19200, 38400 e 115200 | `!S<baud>` → ACK textual na velocidade anterior → DAT na nova; recuperação ativa por `!P` e velocidades alternativas |
+| Detecção de queda de link no desktop | Sem watchdog no firmware; cabo removido ou silêncio DAT → **Link perdido**; não implica corte |
 | Firmware do Arduino UNO e placa virtual | `firmware/smartgrid_placa/smartgrid_placa.ino` e `tools/simulador_placa.py` |
 | Fases do handshake e velocidade negociada visíveis ao operador | Tela Comunicação Serial (`SerialConfigView` + `SerialConfigController`) |
-| Taxa de amostragem configurável e persistida | Campo da tela serial → `taxa_amostragem_ms` no `config.json` → janela de agregação do `SerialWorker` |
+| Agregação configurável e persistida | Campo da tela serial → `taxa_amostragem_ms` no JSON → janela do desktop; Timer1 fixo em 200 Hz |
 | Histórico de medições no banco | Tabela `leituras` com índice por data/hora, gravada em lote |
 | Gráfico em tempo real e consulta histórica | Dashboard: modo tempo real e filtros "últimas N" ou intervalo de data/hora |
 | Eventos ligados ao dispositivo | `eventos.dispositivo_id`; coluna e filtro de dispositivo no Histórico |
@@ -1011,10 +959,12 @@ rg -n '(SELECT|INSERT|UPDATE|DELETE).*%\s*(\(|[A-Za-z_])' -g '*.py' .
 
 ## Critérios Avaliativos (A1/5)
 
+A descrição operacional foi atualizada para o firmware obrigatório; mecanismos do protocolo anterior não devem ser apresentados como existentes na placa.
+
 | # | Categoria | Como o projeto atende | Nota Máx. |
 |---|---|---|---|
 | **1** | **Concorrência e threads** | • Serial e SQLite fora da thread da GUI (`SerialWorker` e `DatabaseWorker`)<br>• Comunicação entre threads só por sinais e callbacks entregues na GUI<br>• Encerramento cooperativo (`parar()` + `wait()`, `deleteLater`) e testes de concorrência | **—** |
-| **2** | **Protocolo serial e handshake** | • Amostras `$DAT,...*CS` com checksum XOR e descarte de linhas inválidas<br>• Início sempre a 9600 bps (`!S<baud>`), negociação entre 9600, 19200, 38400 e 115200 com fallback por `!P`<br>• `!P` ao desconectar e detecção de queda de link no desktop; firmware do professor no Arduino UNO | **2,5 pts** |
+| **2** | **Protocolo serial e handshake** | • Pacotes `$CORPO*CS` com checksum XOR e descarte de pacotes inválidos<br>• Handshake sempre a 9600 bps, negociação entre 9600, 19200, 38400 e 115200 com fallback<br>• Firmware obrigatório: !S, DAT, !0/!1 e !P; detecção de queda no desktop, sem watchdog na placa | **2,5 pts** |
 | **3** | **Persistência e histórico de medições** | • Tabela `leituras` gravada em lote pelo `DatabaseWorker`<br>• Gráfico em tempo real e consulta histórica por últimas N leituras ou intervalo<br>• Eventos de corte e disparo ligados ao dispositivo | **—** |
 | **4** | **MVC estrito e documentação** | • View e Controller separados em todas as telas, sem regra na View e sem widget no Model<br>• Auditoria automática de camadas (`tests/test_arquitetura.py`)<br>• README com threads, protocolo, MVC e passo a passo de execução | **—** |
 | **5** | **Bancada e seminário** | • Arduino UNO montado e gravado, com falha induzida (USB removido) e reconexão<br>• Roteiro de 15 a 20 minutos com os 4 integrantes e arguição | **1,5 pt** |

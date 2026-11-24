@@ -196,7 +196,7 @@ def test_conectar_salva_config_preserva_falha_simulada_e_loga_info(
         "simular_falha_corte": True,
     }
     assert _mensagens(log, "INFO") == [
-        "Conexão serial solicitada: COM7 @ 38400 bps (timeout 3000 ms, amostragem 1000 ms). "
+        "Conexão serial solicitada: COM7 @ 38400 bps (timeout 3000 ms, agregação 1000 ms). "
         "Iniciando handshake a 9600 bps."
     ]
 
@@ -395,6 +395,8 @@ def test_aplicacao_repassa_a_velocidade_negociada_pela_thread(app, monkeypatch, 
     criados = []
 
     class SerialWorkerFalso(QObject):
+        botao_alterado = pyqtSignal(bool)
+        aviso = pyqtSignal(str)
         estado_alterado = pyqtSignal(str, str)
         leitura_recebida = pyqtSignal(object)
         disjuntor_reportado = pyqtSignal(object)

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import logging
 
+from PyQt6 import sip
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from models.barramento import barramento
@@ -67,6 +68,9 @@ class AplicacaoController(QObject):
     #: Velocidade (bps) em que a placa passou a enviar amostras; repassada do SerialWorker
     #: para a tela de comunicação serial.
     velocidade_negociada = pyqtSignal(int)
+    botao_alterado = pyqtSignal(bool)
+    falha_persistencia = pyqtSignal(str)
+    aviso_comunicacao = pyqtSignal(str)
 
     #: Tempo máximo esperando cada thread no encerramento.
     ESPERA_ENCERRAMENTO_MS = 3000
@@ -79,6 +83,9 @@ class AplicacaoController(QObject):
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
+        self._encerrando = False
+        self._operacao_pendente = None
+        self._botao_pressionado = False
         self._config = config
         self._servico_corte = servico_corte
         self._estado_solicitado = estado_inicial
@@ -96,6 +103,7 @@ class AplicacaoController(QObject):
 
         self.banco = DatabaseWorker(parent=self)
         self.banco.finished.connect(self.banco.deleteLater)
+        self.banco.falha_persistencia.connect(self.falha_persistencia)
         self.banco.start()
 
         barramento.evento_registrado.connect(self.banco.gravar_evento)
@@ -121,9 +129,18 @@ class AplicacaoController(QObject):
     def serial_ativa(self) -> bool:
         return self._serial is not None
 
+    @property
+    def botao_pressionado(self) -> bool:
+        return self._serial.botao_pressionado if self._serial is not None else self._botao_pressionado
+
+    @property
+    def contexto_operacao(self) -> tuple:
+        worker = self._serial
+        return (worker, worker.geracao_protecao if worker is not None else 0)
+
     def conectar_serial(self, parametros: ParametrosConexao) -> None:
         """Cria a thread serial e inicia o handshake. Não bloqueia."""
-        if self._serial is not None:
+        if self._serial is not None or self._encerrando:
             raise ErroConexaoSerial(
                 "A conexão anterior ainda está sendo encerrada. Tente em instantes."
             )
@@ -141,10 +158,12 @@ class AplicacaoController(QObject):
         worker.disjuntor_reportado.connect(self._ao_disjuntor_reportado)
         worker.rele_confirmado.connect(self._ao_rele_confirmado)
         worker.rele_falhou.connect(self._ao_rele_falhou)
-        worker.botao_acionado.connect(self._ao_botao_acionado)
+        worker.botao_alterado.connect(self._ao_botao)
+        worker.aviso.connect(self.aviso_comunicacao)
         worker.finished.connect(self._ao_serial_encerrada)
         worker.finished.connect(worker.deleteLater)
         self._serial = worker
+        self._botao_pressionado = False
         self._link_ativo = False
         self._primeira_telemetria = True
         self._estado_reportado = None
@@ -185,17 +204,58 @@ class AplicacaoController(QObject):
             )
 
     def solicitar_estado_disjuntor(self, destino: EstadoDisjuntor, valor_medido: str = "") -> bool:
-        """Persiste a intenção e coordena uma única atuação, fora da thread da GUI."""
-        if self.comando_pendente or not self._link_ativo or self._estado_reportado is None:
+        return self.executar_comando_manual(destino, valor_medido)
+
+    def executar_comando_manual(self, destino, resumo, *, ao_concluir=None, ao_falhar=None) -> bool:
+        """COMMIT autoriza enviar; somente DAT posterior conclui a atuação."""
+        worker = self._serial
+        if (self.comando_pendente or not self._link_ativo or self._estado_reportado is None
+                or worker is None):
+            if ao_falhar:
+                ao_falhar(RuntimeError("Aguarde telemetria válida e a operação pendente."))
             return False
+        geracao = worker.geracao_protecao
+        if destino.energizado and not worker.pode_religar(geracao):
+            if ao_falhar:
+                ao_falhar(RuntimeError("Libere o botão antes de solicitar o religamento."))
+            return False
+        operacao = dict(worker=worker, geracao=geracao, destino=destino,
+                        concluir=ao_concluir, falhar=ao_falhar, evento=None)
+        self._operacao_pendente = operacao
         self._destino_pendente = destino
         self._persistindo = True
-        self._serial_da_operacao = self._serial
+        self._serial_da_operacao = worker
         self._publicar_situacao(ConfirmacaoDisjuntor.PENDENTE, "Salvando solicitação de atuação.")
-        self.banco.executar(
-            self._servico_corte.executar, destino, valor_medido,
-            ao_falhar=self._ao_falhar_persistencia,
-        )
+
+        def validar():
+            if (sip.isdeleted(worker) or worker.isInterruptionRequested()
+                    or worker.geracao_protecao != geracao
+                    or (destino.energizado and not worker.pode_religar(geracao))):
+                raise RuntimeError("Operação cancelada pela proteção ou desconexão.")
+
+        def concluida(evento):
+            if self._operacao_pendente is not operacao:
+                return
+            self._persistindo = False
+            try:
+                validar()
+            except RuntimeError as erro:
+                self._falhar_operacao(str(erro))
+                return
+            if self._serial is not worker or not self._link_ativo:
+                self._falhar_operacao("Solicitação salva, mas a conexão mudou.")
+                return
+            operacao['evento'] = evento
+            self._estado_solicitado = destino
+            self._iniciar_comando(destino, geracao=geracao)
+
+        def falhou(erro):
+            if self._operacao_pendente is operacao:
+                self._ao_falhar_persistencia(erro)
+
+        self.banco.executar(self._servico_corte.executar, destino, resumo,
+                            publicar_estado=False, validar=validar,
+                            ao_concluir=concluida, ao_falhar=falhou)
         return True
 
     # ------------------------------------------------------------------
@@ -228,10 +288,11 @@ class AplicacaoController(QObject):
             )
 
     def _ao_leitura(self, leitura: Leitura) -> None:
-        if not self._link_ativo or self.sender() is not self._serial:
+        if self.sender() is not self._serial:
             return
         self._ultima_leitura = leitura
-        barramento.leitura_recebida.emit(leitura)
+        if self._link_ativo:
+            barramento.leitura_recebida.emit(leitura)
         self.banco.gravar_leitura(leitura)
 
     def _ao_disjuntor_reportado(self, estado: EstadoDisjuntor) -> None:
@@ -281,15 +342,31 @@ class AplicacaoController(QObject):
             ao_falhar=self._ao_falhar_registro_disparo,
         )
 
-    def _ao_botao_acionado(self) -> None:
-        """Botão da placa: o firmware só o reporta; o desktop comanda o corte."""
+    def _ao_botao(self, pressionado: bool) -> None:
         if self.sender() is not self._serial or not self._link_ativo:
             return
-        resumo = self._ultima_leitura.resumo()
-        barramento.registrar_evento(TipoEvento.ALERTA, "Botão de proteção acionado na placa", resumo)
-        if self.comando_pendente or self._estado_reportado is not EstadoDisjuntor.FECHADO:
+        if pressionado == self._botao_pressionado:
             return
-        self._disparo_pelo_botao = self.solicitar_estado_disjuntor(EstadoDisjuntor.ABERTO, resumo)
+        self._botao_pressionado = pressionado
+        if pressionado:
+            # !0 já foi enviado pela serial, inclusive com GUI/SQLite ocupados.
+            religando = self._persistindo or self._destino_pendente is EstadoDisjuntor.FECHADO
+            if religando:
+                self._falhar_operacao("Operação cancelada pelo botão de proteção; corte prioritário solicitado.")
+            self._estado_solicitado = EstadoDisjuntor.ABERTO
+            aguardar = True  # cada nova pressão solicita !0 e aguarda DAT posterior
+            self._disparo_pelo_botao = aguardar
+            self._destino_pendente = EstadoDisjuntor.ABERTO if aguardar else None
+            self._publicar_situacao(ConfirmacaoDisjuntor.PENDENTE if aguardar
+                                    else ConfirmacaoDisjuntor.CONFIRMADO)
+            self.banco.executar(self._servico_corte.registrar_botao_protecao,
+                                self._ultima_leitura.resumo(),
+                                ao_falhar=self._avisar_falha_persistencia)
+        self.botao_alterado.emit(pressionado)
+
+    def _avisar_falha_persistencia(self, erro: Exception) -> None:
+        logger.error("Falha de persistência; corte físico independe do banco: %s", erro)
+        self.falha_persistencia.emit(str(erro))
 
     def _ao_falhar_registro_disparo(self, erro: Exception) -> None:
         logger.error("Falha ao registrar o disparo espontâneo no banco: %s", erro)
@@ -297,6 +374,9 @@ class AplicacaoController(QObject):
 
     def _ao_estado_disjuntor(self, estado: EstadoDisjuntor) -> None:
         """COMMIT confirma a intenção; a telemetria confirma o estado da placa."""
+        if estado is EstadoDisjuntor.FECHADO:
+            # Intenção antiga do barramento não vale como novo pedido manual.
+            return
         self._estado_solicitado = estado
         if self._persistindo:
             self._persistindo = False
@@ -317,10 +397,10 @@ class AplicacaoController(QObject):
             return
         self._iniciar_comando(estado)
 
-    def _iniciar_comando(self, destino: EstadoDisjuntor) -> None:
+    def _iniciar_comando(self, destino: EstadoDisjuntor, *, geracao=None) -> None:
         self._destino_pendente = destino
         self._publicar_situacao(ConfirmacaoDisjuntor.PENDENTE)
-        if self._serial is None or not self._serial.enviar_rele(destino.energizado):
+        if self._serial is None or not self._serial.enviar_rele(destino.energizado, geracao):
             self._falhar_operacao("Não foi possível enviar o comando à placa.")
 
     def _ao_rele_confirmado(self, destino: EstadoDisjuntor) -> None:
@@ -329,7 +409,10 @@ class AplicacaoController(QObject):
         if not self._link_ativo or self._estado_reportado is not destino:
             return
         self._destino_pendente = None
+        operacao, self._operacao_pendente = self._operacao_pendente, None
         self._publicar_situacao(ConfirmacaoDisjuntor.CONFIRMADO)
+        if operacao is not None and operacao['concluir']:
+            operacao['concluir'](operacao['evento'])
         barramento.registrar_evento(
             TipoEvento.STATUS, f"Comando de {destino.name} confirmado pela telemetria da placa"
         )
@@ -338,6 +421,8 @@ class AplicacaoController(QObject):
             self.disparo_simulado.emit("")
         if self._disparo_pelo_botao:
             self._disparo_pelo_botao = False
+            self.banco.executar(self._servico_corte.sincronizar_estado, destino,
+                                ao_falhar=self._avisar_falha_persistencia)
             self.disparo_espontaneo.emit("")
 
     def _ao_rele_falhou(self, destino: EstadoDisjuntor, motivo: str) -> None:
@@ -354,20 +439,27 @@ class AplicacaoController(QObject):
             )
         else:
             motivo = f"Não foi possível salvar a solicitação. Nenhum comando foi enviado.\n{erro}"
-        self._falhar_operacao(motivo, registrar=False)
+        self._falhar_operacao(motivo, registrar=False, erro=erro)
         if self._estado_reportado is EstadoDisjuntor.ABERTO and self._estado_solicitado is EstadoDisjuntor.FECHADO:
-            # D2 pode ter aberto a carga enquanto o SQLite tentava salvar o
+            # A proteção pode ter aberto a carga enquanto o SQLite tentava salvar o
             # corte. O rollback não desfaz a abertura reportada pela placa.
             self._registrar_disparo()
 
-    def _falhar_operacao(self, motivo: str, *, registrar: bool = True) -> None:
+    def _falhar_operacao(self, motivo: str, *, registrar: bool = True, erro=None) -> None:
+        operacao, self._operacao_pendente = self._operacao_pendente, None
+        self._persistindo = False
         self._destino_pendente = None
         self._simulando_disparo = False
         self._disparo_pelo_botao = False
         self._publicar_situacao(ConfirmacaoDisjuntor.FALHA, motivo)
         if registrar:
             barramento.registrar_evento(TipoEvento.ALERTA, f"Falha de confirmação: {motivo}")
-        self.operacao_falhou.emit(motivo)
+        if not self._encerrando:
+            if operacao is not None and operacao['falhar']:
+                operacao['falhar'](erro if erro is not None else RuntimeError(motivo))
+            self.operacao_falhou.emit(motivo)
+        else:
+            logger.warning("Operação encerrada sem confirmação: %s", motivo)
 
     def _invalidar_comunicacao(self, motivo: str) -> None:
         self._link_ativo = False
@@ -397,21 +489,27 @@ class AplicacaoController(QObject):
         if self.sender() is self._serial:
             if self._link_ativo:
                 self._invalidar_comunicacao("Comunicação serial encerrada.")
+            self._serial.entregar_leituras()
             self._serial = None
 
     # ------------------------------------------------------------------
     # Encerramento
     # ------------------------------------------------------------------
     def encerrar(self) -> None:
-        """Parada cooperativa das duas threads; chamado no ``aboutToQuit``."""
+        if self._encerrando:
+            return
+        self._encerrando = True
+        self.desconectar_serial()
         if self._serial is not None:
-            serial = self._serial
-            serial.parar()
-            if not serial.wait(self.ESPERA_ENCERRAMENTO_MS):
-                logger.error("A thread serial não encerrou no prazo.")
-
-        # Por último: grava o que a serial ainda produziu antes de parar.
-        self.banco.parar()
-        if not self.banco.wait(self.ESPERA_ENCERRAMENTO_MS):
-            logger.error("A thread de banco não encerrou no prazo.")
-        logger.info("Threads encerradas. Aplicação finalizada.")
+            worker = self._serial
+            if not worker.wait(self.ESPERA_ENCERRAMENTO_MS):
+                logger.warning("Aguardando encerramento cooperativo da serial.")
+                worker.wait()  # nunca destruir uma QThread em execução
+            worker.entregar_leituras()
+        # Não aceitar tarefas após a sentinela; drena o que já foi recebido.
+        if not sip.isdeleted(self.banco):
+            self.banco.parar()
+            if not self.banco.wait(self.ESPERA_ENCERRAMENTO_MS):
+                logger.warning("Aguardando SQLite concluir a fila de persistência.")
+                self.banco.wait()
+        logger.info("Workers encerrados e recursos liberados.")

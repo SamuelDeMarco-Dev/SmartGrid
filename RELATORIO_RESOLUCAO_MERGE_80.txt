@@ -1,0 +1,132 @@
+SMARTGRID — RESOLUÇÃO DO MERGE DO PR #80
+Data de referência: 23/11/2026 (America/Sao_Paulo)
+
+1. CONTEXTO E REFERÊNCIAS
+
+PR: https://github.com/SamuelDeMarco-Dev/SmartGrid/pull/80
+Branch de trabalho: fix/a1-5-serial-resilience-64
+HEAD preservado: 6e2e8d2a86b49eb34117192993eb96b5394375a4
+Main atual confirmada pelo GitHub e pelo MERGE_HEAD/origin/main:
+533d9a128d33e0b9e2247c2ff6b186677670f072
+A main local estava 13 commits atrasada; não foi usada como referência. O merge que já estava em andamento apontava para a origin/main atualizada, e foi esse estado que foi resolvido. Não foi necessário refazer ou abortar o merge.
+Nenhum commit, push, atualização de branch remota ou merge remoto foi executado.
+
+2. OS 20 CONFLITOS RESOLVIDOS
+
+01. README.md
+    Documentação da branch preservada e complementada com SituacaoDisjuntor/D01, novas regras de confirmação e reconexão da main.
+
+02. controllers/aplicacao_controller.py
+    Mantidos os estados solicitado/reportado/confirmacao, falhas e boot da main. Integrados prioridade física independente de SQLite, geração de proteção, callbacks manuais, contexto modal e encerramento cooperativo da branch.
+
+03. controllers/dashboard_controller.py
+    Mantida a interface D01 da main (PENDENTE/CONFIRMADO/FALHA/DESCONHECIDO). Preservados alertas por picos, bloqueio do botão retido e invalidação da confirmação modal da branch.
+
+04. docs/bancada.md
+    Montagem e limitações do firmware da branch preservadas; acrescentada confirmação D01, reconexão segura e comandos de ambas as variantes do simulador.
+
+05. docs/roteiro-demonstracao.md
+    Preservada a divisão entre integrantes e demonstrações; integradas as situações e avisos reais da main.
+
+06. firmware/smartgrid_placa/smartgrid_placa.ino
+    Restaurado exatamente o firmware obrigatório fornecido anteriormente. A diferença da main era apenas formatação/espaços finais e newline; a exigência de identidade prevaleceu.
+
+07. models/config_manager.py
+    Mantida a chave taxa_amostragem_ms e demais parâmetros. Descrição correta de janela de agregação no desktop; não altera Timer1.
+
+08. models/porta_serial.py
+    Mantidas validações e quatro velocidades; preservada a nomenclatura de agregação da branch e enumeração existente.
+
+09. models/protocolo.py
+    Preservados Amostra, Resposta, TipoResposta, conversor ADC e auxiliares do firmware da main. Integradas validação estrita de ADC/digitais e APIs de observação da branch; sem reintroduzir HS/SYNC/TLM/PING/BYE no enlace.
+
+10. models/serial_worker.py
+    Combinados pedido único e sinais de confirmação/falha da main com recuperação ativa de baud, ACK perdido, prioridade !0, debounce, proteção inicial/pendente, médias constantes, máximos e filas limitadas da branch.
+
+11. models/servico_corte.py
+    Preservadas transações/rollback e variantes inicial/simulado da main. Mantidas validação da geração, auditoria física separada e sincronização dos dois dispositivos da branch.
+
+12. tests/serial_simulada.py
+    Mantidos diagnóstico de perda de comando/ACK, ACK sem atuação e temporização da main. Integrados baud real em memória, ADC determinístico e modos de falha/boot da branch.
+
+13. tests/test_aplicacao_controller.py
+    Mantidas regressões da main. Preservada a versão da branch em tests/test_branch80_aplicacao_controller.py.
+
+14. tests/test_concorrencia.py
+    Preservados testes de concorrência/encerramento; incorporado o teste de fluxo nominal de 200 DAT/s com agregação e GUI responsiva da branch.
+
+15. tests/test_protocolo.py
+    Mantidos os testes da main, incluindo auxiliares e parser do firmware. Regressões estritas da branch preservadas em tests/test_branch80_protocolo.py.
+
+16. tests/test_resiliencia_serial.py
+    Mantidos cenários da main. A sequência esperada admite a sondagem ativa de múltiplos bauds, conservando a exigência de !P e novo !S em 9600. Cenários da branch permanecem em tests/test_branch80_resiliencia_serial.py.
+
+17. tests/test_serial_worker.py
+    Preservados cenários POSIX da main e mantidos os da branch em tests/test_branch80_serial_worker.py; tratamento do botão alinhado à responsabilidade do worker desktop de enviar !0.
+
+18. tools/simulador_placa.py
+    Preservados parser caractere a caractere, aliases de comando, banner, reinício, gerador e pulso b da main. Integrados d/l, --falhar-inicio, boot lento, ACK perdido, estado inicial e ADC fixável da branch; --falhar-em continua disponível.
+
+19. ui/serial_config.ui
+    Layout e componentes preservados. Rótulo Intervalo de agregação e tooltip deixam clara aquisição fixa de 200 Hz e recomendação de 115200.
+
+20. ui/serial_config_ui.py
+    Mesmo ajuste textual do arquivo .ui, mantendo a correspondência entre fonte Designer e módulo gerado.
+
+3. IMPLEMENTAÇÕES NÃO CONFLITANTES PRESERVADAS
+
+Mantidos os arquivos já integrados pelo merge: models/barramento.py, models/situacao_disjuntor.py, tests/conftest.py, tests/test_confirmacao_corte.py, tests/test_dashboard.py, tests/test_serial_config_controller.py e views/dashboard_view.py. A integração não descarta a implementação de confirmação D01 dos demais integrantes.
+Mantidos também os acréscimos da branch sem conflito: Leitura.picos, avaliador por máximos, DatabaseWorker com limites de leituras/lotes, histórico e regras persistentes, calibração dos potenciômetros e textos de tensão/corrente simuladas.
+MVC, GUI existente, SQLite e três threads preservados. Não houve mudança de tabelas, dependências, requisitos ou nova thread de produção.
+
+4. DECISÕES DE INTEGRAÇÃO E SEGURANÇA
+
+- Intenção do SQLite é independente do estado reportado e da confirmação da placa. ACK ou commit isolado nunca confirmam corte.
+- Falha de atuação com DAT ainda válido mantém o link ativo e exibe FALHA, permitindo nova solicitação manual. Perda de comunicação invalida o estado reportado (None/DESCONHECIDO).
+- Cada nova pressão debounced solicita !0, inclusive com carga já aberta ou religamento aguardando commit. Não há um comando por pacote: há uma solicitação por pressão. Essa decisão preserva a prioridade física da branch; a otimização anterior da main de não reenviar !0 em nova pressão com relé aberto foi substituída por esse comportamento seguro.
+- Religamento retido é bloqueado; soltar por 50 ms apenas libera um NOVO pedido manual. Geração de proteção invalida operação antiga, e o contexto modal impede reaproveitar aceite anterior à pressão/reconexão.
+- Nova transição inesperada para FECHADO durante botão retido recebe novo corte. Estado continuamente divergente não produz retransmissão infinita a cada DAT.
+- O desligamento físico não aguarda SQLite ou event loop da GUI. A ocorrência é auditada quando possível; falha real de gravação é informada sem impedir o comando.
+- Transações manuais continuam antes do comando, com o mesmo ponto de falha simulada e rollback. Não foi removida a demonstração acadêmica de atomicidade.
+- Preservados status de boot sem falso alerta, simulação identificada, um resultado por comando e uma tentativa de corte na reconexão com intenção ABERTO/placa FECHADO. Nunca há religamento automático.
+- Recuperação por !P nas velocidades possíveis não pressupõe watchdog. ACK válido sem DAT permite tentar baud menor sem desperdiçar todo o prazo de boot; ACK perdido ainda permite conexão por DAT.
+- ADC 0–1023, RELE/BOTAO 0/1 e checksum XOR são validados. Timer1 continua 200 Hz/5 ms, D13 100 Hz; o intervalo configurado só agrega no desktop.
+- Médias/picos e limites das filas da branch foram conservados. Tela, gráfico e SQLite continuam com médias coerentes e corrente simulada zero com relé aberto.
+
+5. FIRMWARE OBRIGATÓRIO
+
+O arquivo foi restaurado dos bytes fornecidos anteriormente, incluindo CRLF, espaços finais e ausência de newline final. Não houve mudança funcional ou de formatação no firmware obrigatório.
+SHA-256 obrigatório e conferido:
+8B1F30C4A165F422239E03FEA02907E4075E8A7745E2B65134A2F5E5E313F056
+Os espaços finais originais são intencionais para atender à identidade exigida. Não executar formatador nesse arquivo. Ele é excluído apenas da verificação de whitespace, nunca dos testes de compatibilidade.
+
+6. TESTES E VERIFICAÇÕES
+
+Suíte completa: 307 aprovados, 27 ignorados, 0 falhas e 0 erros. Total: 334. Tempo exibido pelo pytest: 44,76 s. Código de saída 0.
+Comando executado:
+.\.venv\Scripts\python.exe -m pytest -q -ra --junitxml=.pytest_cache/merge80/resultado_final.xml
+Os 27 testes ignorados são de pseudoterminal POSIX indisponível no Windows; incluem os cenários mantidos das duas branches. Transporte em memória cobre os cenários funcionais no Windows.
+Testes focados: 70 de confirmação/proteção/resiliência passaram; 20 de aquisição/proteção e interação do merge também passaram.
+Novos cenários em tests/test_merge80_integracao.py: religamento inesperado com botão retido, corte perdido sem retransmissão por DAT e resposta ERR do simulador a baud inválido sem abortar o parser.
+Os testes anteriores foram preservados. Expectativas alteradas refletem a combinação de contratos: estado desconhecido após desconexão, FALHA sem derrubar link com DAT ativo, LOW estável antes de novo pedido manual, um !0 por nova pressão e sondagem de múltiplos bauds. Nenhum limite temporal foi ampliado para fazer a suíte passar.
+compileall passou para models/controllers/views/tools/tests/ui/database/main.py. Os arquivos ativos não contêm marcadores de conflito. A revisão de whitespace exclui somente o firmware original, que não pode ser reformatado.
+Evidências locais, ignoradas pelo Git: .pytest_cache/merge80/resultado_final.xml e testes_finais.txt. Snapshots base/branch/main e cópias do conflito original estão no mesmo diretório para consulta/reversibilidade.
+Nenhuma porta serial física foi aberta por esta validação. Arduino/osciloscópio, alimentação, contato de relé e DTR real continuam exigindo ensaio de bancada. O botão depende de software e serial; não é proteção elétrica independente.
+
+7. CONCLUSÃO MANUAL DO PROCESSO
+
+O merge local deve permanecer em andamento, com os arquivos resolvidos no índice, até o usuário criar o commit. main e HEAD não devem mudar durante a resolução. Conferir:
+git status
+git diff --name-only --diff-filter=U
+  (A segunda saída deve estar vazia.)
+git diff --cached --stat
+git diff --cached
+git diff --cached --check -- . ':(exclude)firmware/smartgrid_placa/smartgrid_placa.ino'
+.\.venv\Scripts\python.exe -m pytest -q
+
+Depois de revisar, executar MANUALMENTE:
+git commit -m "Resolve merge da main no PR #80 preservando DAT e protecao"
+git push origin fix/a1-5-serial-resilience-64
+
+O push apenas atualiza a branch do PR. Revisar os checks e concluir o merge do PR #80 manualmente no GitHub. Não executar um novo git merge enquanto o merge local atual estiver pendente.
+Se a main avançar depois da referência registrada, incorporar a nova versão antes do merge remoto e repetir os testes pertinentes. Nenhuma força de push é necessária para esta resolução por merge.

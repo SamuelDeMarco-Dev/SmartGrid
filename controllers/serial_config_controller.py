@@ -9,7 +9,7 @@ Media a ``SerialConfigView`` e o Model:
       → Negociando velocidade → Telemetria ativa, ou Link perdido;
     - velocidade efetivamente negociada (``velocidade_negociada`` do serviço
       serial) → rótulo da tela;
-    - porta, velocidade alvo, timeout e taxa de amostragem → ``data/config.json``,
+    - porta, velocidade alvo, timeout e intervalo de agregação → ``data/config.json``,
       gravado no ``DatabaseWorker`` para não bloquear a GUI.
 
 Entradas inválidas geram ``[WARNING]`` no log; conectar e desconectar geram
@@ -149,7 +149,7 @@ class SerialConfigController(QObject):
             )
             try:
                 taxa_ms = PortaSerial.validar_taxa_amostragem(
-                    self._inteiro(self.view.taxa_digitada(), "a taxa de amostragem")
+                    self._inteiro(self.view.taxa_digitada(), "o intervalo de agregação")
                 )
                 # A taxa nova já vale para esta conexão: o SerialWorker nasce
                 # com a configuração em memória do serviço serial.
@@ -176,7 +176,7 @@ class SerialConfigController(QObject):
             return
 
         logger.info(
-            "Conexão serial solicitada: %s (timeout %d ms, amostragem %d ms). "
+            "Conexão serial solicitada: %s (timeout %d ms, agregação %d ms). "
             "Iniciando handshake a 9600 bps.",
             parametros.descricao, parametros.timeout_ms, taxa_ms,
         )
