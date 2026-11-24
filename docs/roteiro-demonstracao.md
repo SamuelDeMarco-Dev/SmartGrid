@@ -69,7 +69,7 @@ Alterar limites de tensão/corrente/potência. Testar entrada vazia/inválida, c
 
 ### Falha USB e recuperação
 
-Remover o USB: Link perdido e estado **SEM CONFIRMAÇÃO**, preservando o último conhecido. Não afirmar carga desligada. Se USB era a única alimentação, também houve desligamento da placa; isso não simula perda de comunicação com placa alimentada.
+Remover o USB: Link perdido e estado **DESCONHECIDO**, sem confundir a intenção persistida com o estado reportado. Não afirmar carga desligada. Se USB era a única alimentação, também houve desligamento da placa; isso não simula perda de comunicação com placa alimentada.
 
 Reconectar cabo, esperar enumeração e término do worker anterior, atualizar portas e conectar manualmente. O estado vem do DAT. O desktop não religa automaticamente. Para ensaiar placa ainda transmitindo, usar alimentação separada e o procedimento da bancada; não esperar retorno espontâneo a 9600.
 
@@ -117,3 +117,11 @@ Ao terminar, solicitar corte e aguardar DAT se o combinado for deixar a carga de
 - [ ] Backup preservado, banco demonstrativo identificado e porta correta selecionada.
 - [ ] Ensaio físico distinguido de testes em memória e GUI offscreen.
 - [ ] Estado final da carga conferido antes de pausar e liberar a porta.
+
+## Integração PR #80 — pontos preservados da main
+
+Mostrar PENDENTE, CONFIRMADO e FALHA no badge existente, com `SituacaoDisjuntor` separando intenção e DAT. Uma atuação perdida não confirma a carga e não repete comandos; se DAT continua ativo, o operador pode solicitar novamente. Sem comunicação, o estado reportado é desconhecido. Boot com relé aberto é status, não proteção atuada. A simulação permanece identificada e nunca fabrica confirmação serial offline.
+
+Na reconexão, intenção ABERTO com placa FECHADO permite uma única tentativa segura de corte. Nenhum religamento é automático. O botão físico tem prioridade mesmo sobre religamento aguardando commit; auditoria não bloqueia !0. Somente LOW estável e novo pedido manual permitem religar.
+
+No simulador, `b` continua gerando um pulso; `d` mantém e `l` libera D11. `--falhar-em` e `--falhar-inicio` exercitam falhas distintas. Consultar o relatório de resolução do merge para testes atuais e lista dos conflitos combinados.

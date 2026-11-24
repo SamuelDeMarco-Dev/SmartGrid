@@ -52,13 +52,13 @@ DAT aceita LF ou CRLF, ADC inteiro na faixa 0–1023, RELE e BOTAO estritamente 
 
 O desktop abre em 9600 e tolera até 6 s para o boot/reset por DTR. Envia `!S<alvo>`, aguarda o ACK e testa DAT na velocidade alvo mesmo se o ACK se perder. Fragmentos da velocidade anterior são descartados. Se não houver DAT, envia `!P` nas quatro velocidades possíveis para recuperar uma placa que continuou transmitindo; então tenta novamente a partir de 9600 e pode tentar alvos menores. Não depende de retorno automático a 9600. A recuperação pode levar vários segundos e pode ser cancelada pela interface.
 
-O firmware não tem watchdog. `!S9600` durante transmissão em outra velocidade também não força a troca para 9600; a recuperação usa `!P`. Silêncio de DAT por `max(0,5 s, timeout configurado)` ou erro de porta encerra o worker e mostra **Link perdido**. ACK/ERR não mantêm artificialmente o link ativo. Reconexão é manual, com novo worker e sem religar a carga automaticamente.
+O firmware não tem watchdog. `!S9600` durante transmissão em outra velocidade também não força a troca para 9600; a recuperação usa `!P`. Falha de confirmação da atuação, com DAT ativo, mantém a conexão para nova ação manual, sem retransmissão automática. Silêncio de DAT por `max(0,5 s, timeout configurado)` ou erro de porta encerra o worker e mostra **Link perdido**. ACK/ERR não mantêm artificialmente o link ativo. Reconexão é manual, com novo worker e sem religar a carga automaticamente. Se a intenção persistida era ABERTO e DAT reporta FECHADO ao conectar, é mantida uma tentativa segura de corte por conexão; falha dessa tentativa fica visível e não é repetida a cada DAT.
 
 ## Botão de proteção e banco
 
 O botão D11 apenas informa seu estado. O `SerialWorker` envia `!0` imediatamente no primeiro HIGH válido, substitui qualquer `!1` pendente e invalida religamentos que aguardavam SQLite. O corte não espera a GUI nem um commit. A liberação exige 50 ms de LOW estável; bounce não gera várias ocorrências. Ao conectar com D11 HIGH, o mesmo tratamento se aplica, inclusive se o relé já estiver aberto.
 
-O desktop tenta auditar a solicitação no SQLite e reconcilia os dois dispositivos depois do DAT. Uma falha real de gravação é informada sem impedir o comando. Só há aviso de **carga desligada** depois de RELE=0 no DAT. Sem confirmação, a tela informa estado sem confirmação/último conhecido. RELE em DAT representa a leitura lógica de D12; não comprova o contato mecânico do relé nem a ausência de energia na carga real. Soltar o botão não religa: é necessário solicitar manualmente depois da liberação.
+O desktop tenta auditar a solicitação no SQLite e reconcilia os dois dispositivos depois do DAT. Uma falha real de gravação é informada sem impedir o comando. Só há aviso de **carga desligada** depois de RELE=0 no DAT. Sem telemetria válida, o modelo informa estado desconhecido (`None`) e o badge exibe DESCONHECIDO. A intenção persistida continua separada do estado reportado. RELE em DAT representa a leitura lógica de D12; não comprova o contato mecânico do relé nem a ausência de energia na carga real. Soltar o botão não religa: é necessário solicitar manualmente depois da liberação.
 
 **D11 não é uma proteção elétrica independente.** O corte depende de o UNO transmitir o pacote, da comunicação serial e de o desktop executar `!0`. Perder o cabo com a placa alimentada pode deixar a carga ligada.
 
@@ -116,3 +116,11 @@ python tools/simulador_placa.py --falhar-inicio 115200
 ```
 
 Esse modo recusa o início em 115200 para exercitar alvos menores. PTY não impõe baud elétrico; simulação não valida USB, reset por DTR, ADC, osciloscópio, alimentação ou relé físico. Não preencher a tabela de ensaio físico com resultados de simulação.
+
+## Integração da main — estados de confirmação (PR #80)
+
+Mantidos `SituacaoDisjuntor`, `ConfirmacaoDisjuntor`, avisos de operação, status de boot e distinção de simulação do PR #79. A tela distingue solicitação salva, comando PENDENTE, DAT CONFIRMADO e FALHA de confirmação. ACK correto seguido de DAT contraditório falha a operação; ACK ausente com DAT correto pode confirmar. Uma amostra capturada pelo ISR antes do comando, transmitida depois do ACK, não é usada para decidir a atuação.
+
+O corte físico é a exceção à precedência de persistência: o worker envia !0 primeiro, cancela !1 pendente e a auditoria é tentada depois. Testar também HIGH com religamento ainda no SQLite e pressão/liberação enquanto a confirmação modal está aberta. Não reaproveitar o aceite antigo para religar.
+
+O simulador preserva `b` (pulso D11), `--falhar-em` (sem DAT em um baud) e os acréscimos da branch: `d` (manter D11), `l` (liberar), `--falhar-inicio` (recusar início). Há parser de comandos e banner do firmware, modos de perda de comando/ACK e ACK sem atuação para os testes. Nenhum desses modos altera o firmware obrigatório.

@@ -100,7 +100,7 @@ Boot em 9600; recomendado 115200; Timer1 fixo em 200 Hz.
 
 ## Entrega A1/5 — Threads, Protocolo Serial e MVC
 
-Integração revisada em 23/11/2026 para o firmware obrigatório. Ver [RELATORIO_VALIDACAO_FINAL.txt](RELATORIO_VALIDACAO_FINAL.txt) para testes, limitações e ensaio físico pendente.
+Integração revisada em 23/11/2026 para o firmware obrigatório. A validação anterior permanece em [RELATORIO_VALIDACAO_FINAL.txt](RELATORIO_VALIDACAO_FINAL.txt). A integração com a main e os testes atuais estão em [RELATORIO_RESOLUCAO_MERGE_80.txt](RELATORIO_RESOLUCAO_MERGE_80.txt).
 
 Até a A1/2 a telemetria era gerada dentro da própria GUI. Na A1/5 o SmartGrid conversa de verdade com a placa (Arduino UNO ou placa virtual):
 
@@ -108,6 +108,14 @@ Até a A1/2 a telemetria era gerada dentro da própria GUI. Na A1/5 o SmartGrid 
 - o link com a placa segue um **protocolo próprio**, com checksum, handshake a 9600 bps, negociação de velocidade e detecção de queda pelo desktop (sem watchdog na placa);
 - todas as telas seguem **MVC estrito**: a View desenha, o Controller coordena e o Model guarda regras, protocolo e acesso a dados;
 - as medições são gravadas na tabela `leituras`, e o gráfico do Dashboard alterna entre **tempo real** e **histórico**.
+
+### Confirmação do disjuntor e integração da main (PR #80)
+
+Preservada a implementação D01 do PR #79: `SituacaoDisjuntor` separa `solicitado` (intenção persistida), `reportado` (DAT da conexão atual) e `ConfirmacaoDisjuntor`: DESCONHECIDO, PENDENTE, CONFIRMADO ou FALHA. Um commit/ACK não confirma atuação. Sem telemetria válida, `estado_disjuntor` é `None`; o badge existente mostra DESCONHECIDO. Telemetria contraditória retira a confirmação. Falha de atuação com DAT ainda ativo mantém o link utilizável, mostra FALHA e permite nova solicitação manual, sem repetição automática do comando.
+
+O botão físico conserva a prioridade implementada na branch: `!0` sai na serial sem esperar SQLite ou GUI, inclusive durante religamento que aguarda commit. A geração de proteção invalida pedidos antigos. Release exige 50 ms estáveis; depois ainda é necessária nova solicitação manual. O destino e contexto de uma confirmação modal são fixados antes do diálogo.
+
+A main também mantém o status de boot com relé aberto (sem falso aviso de proteção), simulação identificada, um resultado por comando e uma tentativa segura de corte na reconexão se a intenção persistida era ABERTO. Nenhuma conexão religa a carga automaticamente. Regressões dos dois lados são preservadas.
 
 ### As três threads
 
@@ -350,7 +358,7 @@ Todo método que escreve aceita um parâmetro opcional `conn`: com ele, particip
 - `HistoricoView` publica filtros e ações; `HistoricoController` (`QObject`) consulta e limpa pelo `DatabaseWorker.executar()` compartilhado. Tipo, data inicial e dispositivo são combináveis; o `LEFT JOIN` preserva eventos sem dispositivo. A tabela é somente leitura e preenchida em lotes de 100 linhas, sem medir todas as células a cada atualização.
 - Eventos gerados na tela (corte emergencial, alarme de limite, disparo do disjuntor, conexão serial) são publicados no barramento e gravados pelo `DatabaseWorker` ou pela transação do serviço de corte. Só depois do commit é emitido `evento_persistido`. O histórico agrupa essas notificações por 150 ms e busca apenas os IDs posteriores ao snapshot, com o dispositivo real do banco. Não repete a consulta completa a cada evento nem altera o contrato de `Evento`.
 - Respostas de filtros antigos são descartadas; o fechamento da tela solta seus callbacks sem cancelar gravações já enfileiradas. Limpar exige confirmação visual, desabilita o botão durante a operação e informa sucesso ou erro.
-- O dashboard conserva o último estado de `dispositivos` e mostra SEM CONFIRMAÇÃO até receber DAT.
+- O dashboard mantém a intenção de `dispositivos` separada do estado reportado e mostra DESCONHECIDO até receber DAT válido.
 
 ### Transações atômicas e tratamento de erros
 
@@ -805,7 +813,7 @@ Seguir [docs/bancada.md](docs/bancada.md): A0/A1 nos potenciômetros; D11 Active
 5. Solicitar religamento manual com D11 liberado. Variar os potenciômetros e conferir médias, picos nos alertas e histórico SQLite.
 6. Antes de terminar, cortar manualmente se desejar deixar a carga desligada, aguardar confirmação DAT e então desconectar. `!P` preserva o relé.
 
-Timer1 adquire a cada 5 ms (200 Hz); D13 alterna e produz 100 Hz. Mudar a agregação não altera essas frequências. Perda de comunicação mantém apenas o último estado conhecido; reconexão é manual e não religa a carga.
+Timer1 adquire a cada 5 ms (200 Hz); D13 alterna e produz 100 Hz. Mudar a agregação não altera essas frequências. Perda de comunicação invalida o estado reportado e mostra DESCONHECIDO; reconexão é manual e não religa a carga.
 
 ### Sem hardware (placa virtual)
 

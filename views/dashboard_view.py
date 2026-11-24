@@ -11,6 +11,7 @@ from PyQt6.QtCore import QDateTime, Qt, pyqtSignal
 from PyQt6.QtWidgets import QMessageBox, QSizePolicy, QWidget
 
 from models.estado_disjuntor import EstadoDisjuntor
+from models.situacao_disjuntor import ConfirmacaoDisjuntor, SituacaoDisjuntor
 from ui.dashboard_ui import Ui_Dashboard
 
 COR_NORMAL = "#2E7D32"
@@ -167,6 +168,33 @@ class DashboardView(QWidget, Ui_Dashboard):
             self.botaoCorteEmergencia.setText("RELIGAR CARGA")
             cor = COR_NORMAL
         self.botaoCorteEmergencia.setStyleSheet(f"background-color: {cor}; color: #FFFFFF;")
+
+    def mostrar_situacao_disjuntor(self, situacao: SituacaoDisjuntor) -> None:
+        """Usa o badge e o detalhe existentes, sempre a partir da telemetria."""
+        estado = situacao.reportado
+        if estado is not None:
+            self.mostrar_disjuntor(estado)
+        else:
+            self.botaoCorteEmergencia.setText("AGUARDANDO ESTADO DA PLACA")
+            self.botaoCorteEmergencia.setStyleSheet(
+                f"background-color: {COR_INATIVA}; color: #FFFFFF;"
+            )
+
+        if situacao.confirmacao is ConfirmacaoDisjuntor.CONFIRMADO and estado is not None:
+            self.labelBadgeDisjuntor.setText(f"{estado.texto_indicador} / CONFIRMADO")
+        else:
+            reportado = estado.name if estado is not None else "DESCONHECIDO"
+            cor = {
+                ConfirmacaoDisjuntor.PENDENTE: COR_ATENCAO,
+                ConfirmacaoDisjuntor.FALHA: COR_CRITICA,
+            }.get(situacao.confirmacao, COR_INATIVA)
+            self.labelBadgeDisjuntor.setText(
+                f"Disjuntor: {reportado} / {situacao.confirmacao.value.upper()}"
+            )
+            self.labelBadgeDisjuntor.setStyleSheet(
+                f"color: #FFFFFF; background-color: {cor}; border-radius: 6px;"
+            )
+        self.labelDetalheDisjuntor.setText(situacao.detalhe)
 
     def habilitar_comandos(self, corte: bool, disparo: bool, dica: str = "") -> None:
         self.botaoCorteEmergencia.setEnabled(corte)

@@ -14,7 +14,6 @@ from database.connection import Database
 from models.barramento import barramento
 from models.leitura import Leitura
 from models.porta_serial import ParametrosConexao
-from models.protocolo import Comando
 from models.repositorio_leituras import FiltroLeituras, RepositorioLeituras
 from models.repositorio_regras import RepositorioRegras
 
@@ -139,7 +138,7 @@ def test_encerramento_cooperativo_drena_fila_e_libera_workers_em_ate_2_s(
     assert len(finalizado_serial) == len(finalizado_banco) == 1
     assert serial.isFinished() and banco.isFinished()
     assert not placa.conexoes[0].is_open
-    assert placa.pacotes_recebidos[-1].comando is Comando.PAUSAR
+    assert placa.comandos_recebidos[-1] == "P"
     assert RepositorioLeituras().contar() >= salvas_antes + 100
     aguardar_qt(lambda: sip.isdeleted(serial) and sip.isdeleted(banco))
     assert not aplicacao_teste.serial_ativa

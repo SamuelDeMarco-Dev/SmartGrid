@@ -12,12 +12,12 @@ from models.barramento import barramento
 from models.config_manager import Configuracao
 from models.estado_disjuntor import EstadoDisjuntor
 from models.porta_serial import ParametrosConexao
-from models.protocolo import Comando
 from models.repositorio_dispositivos import RepositorioDispositivos
 from models.repositorio_eventos import RepositorioEventos
 from models.repositorio_leituras import RepositorioLeituras
 from models.servico_corte import ServicoCorteEmergencial
-from tools.simulador_placa import TELEMETRIA, PlacaVirtual
+from models.situacao_disjuntor import ConfirmacaoDisjuntor
+from tools.simulador_placa import PlacaVirtual
 
 
 def esperar(app, condicao, prazo=5.0):
@@ -34,7 +34,8 @@ def esperar(app, condicao, prazo=5.0):
 def placa():
     if os.name != "posix":
         pytest.skip("Integração com pseudoterminal real requer POSIX (os.openpty e tty).")
-    placa = PlacaVirtual.criar(rele_fechado=True).iniciar()
+    placa = PlacaVirtual.criar().iniciar()
+    placa.rele_fechado = True  # carga ligada, como o banco recém-criado espera
     yield placa
     placa.parar()
 
@@ -53,9 +54,8 @@ def aplicacao(app, tmp_path, monkeypatch):
 
 def _conectar(app, placa, aplicacao):
     aplicacao.conectar_serial(ParametrosConexao(placa.caminho, 115200, 500))
-    assert esperar(app, lambda: placa.estado == TELEMETRIA)
-    # Ao entrar em telemetria o controller alinha o relé da placa ao banco.
-    assert esperar(app, lambda: aplicacao._estado_reportado)
+    assert esperar(app, lambda: placa.conversao_habilitada)
+    assert esperar(app, lambda: aplicacao.situacao_disjuntor.confirmacao is ConfirmacaoDisjuntor.CONFIRMADO)
 
 
 def _descricoes():
@@ -82,17 +82,18 @@ def test_corte_confirmado_no_banco_abre_o_rele_da_placa(app, placa, aplicacao):
     assert esperar(app, lambda: placa.rele_fechado is False)
 
 
-def test_disparo_na_placa_e_gravado_e_avisado(app, placa, aplicacao):
+def test_botao_da_placa_abre_o_rele_e_e_gravado_e_avisado(app, placa, aplicacao):
     avisos = []
     aplicacao.disparo_espontaneo.connect(avisos.append)
     _conectar(app, placa, aplicacao)
 
-    placa.disparar()
+    placa.pressionar_botao()
 
     assert esperar(app, lambda: avisos)
     assert avisos == [""]
+    assert placa.rele_fechado is False
     assert RepositorioDispositivos().obter_por_tag("DISJ-01")["status"] == "ABERTO"
-    assert any("Botão físico" in d for d in _descricoes())
+    assert any("Botão de proteção" in d for d in _descricoes())
 
 
 def test_cabo_arrancado_registra_alerta_e_libera_nova_conexao(app, placa, aplicacao):

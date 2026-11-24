@@ -400,6 +400,9 @@ def test_aplicacao_repassa_a_velocidade_negociada_pela_thread(app, monkeypatch, 
         estado_alterado = pyqtSignal(str, str)
         leitura_recebida = pyqtSignal(object)
         disjuntor_reportado = pyqtSignal(object)
+        rele_confirmado = pyqtSignal(object)
+        rele_falhou = pyqtSignal(object, str)
+        botao_acionado = pyqtSignal()
         velocidade_negociada = pyqtSignal(int)
         finished = pyqtSignal()
 

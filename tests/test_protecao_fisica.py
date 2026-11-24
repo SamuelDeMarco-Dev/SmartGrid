@@ -141,10 +141,12 @@ def test_sem_dat_de_rele_aberto_nao_exibe_confirmacao_de_corte(
     placa.ignorar_rele = True
     confirmacoes = QSignalSpy(aplicacao_teste.disparo_espontaneo)
     perdas = QSignalSpy(worker.link_perdido)
+    falhas = QSignalSpy(worker.rele_falhou)
     placa.disparar()
     aguardar_qt(lambda: comandos(placa, b"!0\n"))
     placa.injetar(b">>> ACK: RELE DESLIGADO <<<\n")
-    aguardar_qt(lambda: len(perdas) == 1)
+    aguardar_qt(lambda: len(falhas) == 1)
+    assert len(perdas) == 0 and worker.isRunning()  # DAT válido mantém o link
     assert len(confirmacoes) == 0
     assert placa.rele_fechado
     assert aplicacao_teste.estado_disjuntor is EstadoDisjuntor.FECHADO
@@ -187,8 +189,10 @@ def test_interface_aguarda_dat_apos_commit_e_marca_desconexao_como_desconhecida(
         assert "FECHADO" in dash.view.labelBadgeDisjuntor.text()
         assert dash._corte_em_andamento
         aguardar_qt(lambda: avisos)
-        assert "SEM CONFIRMAÇÃO" in dash.view.labelBadgeDisjuntor.text()
-        assert dash.view.labelDetalheDisjuntor.text() == "Estado atual da carga sem confirmação"
+        assert "FALHA DE CONFIRMAÇÃO" in dash.view.labelBadgeDisjuntor.text()
+        aplicacao_teste.desconectar_serial()
+        aguardar_qt(lambda: not aplicacao_teste.serial_ativa)
+        assert "DESCONHECIDO" in dash.view.labelBadgeDisjuntor.text()
     finally:
         dash.view.deleteLater()
 
@@ -267,4 +271,4 @@ def test_encerrar_durante_atuacao_nao_abre_callback_modal_nem_confirma_carga(
     aplicacao_teste.encerrar()
     assert worker.isFinished() and not placa.conexoes[0].is_open
     assert not concluidas and not erros
-    assert aplicacao_teste.estado_disjuntor is EstadoDisjuntor.ABERTO
+    assert aplicacao_teste.estado_disjuntor is None  # main: sem DAT, desconhecido

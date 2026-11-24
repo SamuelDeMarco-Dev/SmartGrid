@@ -9,6 +9,7 @@ import logging
 import threading
 import time
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime
 
 import serial
@@ -18,7 +19,7 @@ from models import protocolo
 from models.estado_disjuntor import EstadoDisjuntor
 from models.estado_link import EstadoLink
 from models.leitura import Leitura
-from models.protocolo import Comando, ErroProtocolo
+from models.protocolo import Comando, ErroProtocolo, Resposta, TipoResposta
 
 logger = logging.getLogger("smartgrid")
 
@@ -27,18 +28,31 @@ class ErroLink(Exception):
     """Não há telemetria válida para confirmar o estado físico."""
 
 
+@dataclass(slots=True)
+class _PedidoRele:
+    destino: EstadoDisjuntor
+    prazo: float | None = None
+    ack: bool = False
+    reportado: EstadoDisjuntor | None = None
+    lote: int = -1
+
+
 class SerialWorker(QThread):
     estado_alterado = pyqtSignal(str, str)
     velocidade_negociada = pyqtSignal(int)
     leitura_recebida = pyqtSignal(Leitura)
     disjuntor_reportado = pyqtSignal(EstadoDisjuntor)
     botao_alterado = pyqtSignal(bool)
+    botao_acionado = pyqtSignal()
+    rele_confirmado = pyqtSignal(EstadoDisjuntor)
+    rele_falhou = pyqtSignal(EstadoDisjuntor, str)
     link_perdido = pyqtSignal(str)
     aviso = pyqtSignal(str)
     _leituras_disponiveis = pyqtSignal()
 
     PERIODO_LEITURA_S = 0.02
     PRAZO_PRIMEIRO_HS_S = 6.0  # inclui boot/reset do UNO por DTR
+    PRAZO_PRIMEIRO_INICIO_S = 6.0
     PRAZO_ACK_S = 0.25
     PRAZO_DAT_S = 0.6
     PRAZO_ATUACAO_S = 1.0
@@ -59,7 +73,9 @@ class SerialWorker(QThread):
         self._buffer = b""
         self._trava = threading.Lock()
         self._rele_pendente: bool | None = None
-        self._aguardando: tuple[bool, float, int] | None = None
+        self._pedido_rele: _PedidoRele | None = None
+        self._ignorar_amostras = 0
+        self.prazo_confirmacao_s = self.PRAZO_ATUACAO_S
         self._lote = 0
         self._botao: bool | None = None
         self._liberacao_desde: float | None = None
@@ -93,14 +109,24 @@ class SerialWorker(QThread):
                     and not self.isInterruptionRequested())
 
     def enviar_rele(self, fechado: bool, geracao: int | None = None) -> bool:
-        """Uma posição pendente: !0 substitui !1 e não pode ser ultrapassado."""
+        """Reserva uma atuação; corte pode substituir religamento pendente."""
+        cancelado = None
         with self._trava:
             if self.isInterruptionRequested():
                 return False
             if fechado and (self._botao is not False or self._rele_pendente is False
                             or (geracao is not None and geracao != self._geracao_protecao)):
                 return False
+            pedido = self._pedido_rele
+            if pedido is not None:
+                if fechado or pedido.destino is EstadoDisjuntor.ABERTO:
+                    return False
+                cancelado = pedido.destino
+            self._pedido_rele = _PedidoRele(
+                EstadoDisjuntor.FECHADO if fechado else EstadoDisjuntor.ABERTO)
             self._rele_pendente = fechado
+        if cancelado is not None:
+            self.rele_falhou.emit(cancelado, "Religamento cancelado: desligamento prioritário.")
         return True
 
     def parar(self) -> None:
@@ -124,6 +150,7 @@ class SerialWorker(QThread):
             self._mudar_estado(EstadoLink.LINK_PERDIDO, str(erro))
             self.link_perdido.emit(str(erro))
         finally:
+            self._concluir_rele("Comunicação encerrada antes da confirmação; estado DESCONHECIDO.")
             self._publicar_janela()
             self._fechar()
 
@@ -165,16 +192,24 @@ class SerialWorker(QThread):
 
     def _negociar(self) -> int:
         self._mudar_estado(EstadoLink.HANDSHAKE, "Iniciando em 9600 bps; aguardando boot do UNO")
-        prazo_boot = time.monotonic() + self.PRAZO_PRIMEIRO_HS_S
+        prazo_boot = time.monotonic() + min(self.PRAZO_PRIMEIRO_HS_S, self.PRAZO_PRIMEIRO_INICIO_S)
+        alvo_ativo_sem_dat = False
         # Não repetir !S na velocidade antiga sem testar DAT na nova: o ACK
         # pode se perder depois de o firmware já ter trocado de velocidade.
         while time.monotonic() < prazo_boot:
             if self._iniciar_em_9600(self.baud_alvo):
                 return self.baud_alvo
             self._verificar_interrupcao()
+            if self._inicio_confirmado:
+                # ACK/ERR prova que o firmware já iniciou: não gastar todo o
+                # prazo de boot repetindo um baud sem DAT.
+                alvo_ativo_sem_dat = True
+                break
             # Recupera inclusive placa que ficou transmitindo sem watchdog.
             self._recuperar_9600()
         for baud in protocolo.velocidades_para_tentar(self.baud_alvo):
+            if alvo_ativo_sem_dat and baud == self.baud_alvo:
+                continue
             self._recuperar_9600()
             if self._iniciar_em_9600(baud):
                 return baud
@@ -191,6 +226,7 @@ class SerialWorker(QThread):
         self._trocar_velocidade(9600)
 
     def _iniciar_em_9600(self, baud: int) -> bool:
+        self._inicio_confirmado = False
         self._trocar_velocidade(9600)
         self._serial.write(protocolo.iniciar(baud))
         limite = time.monotonic() + self.PRAZO_ACK_S
@@ -201,7 +237,11 @@ class SerialWorker(QThread):
                 self._primeiras_mensagens = mensagens
                 self._mudar_estado(EstadoLink.NEGOCIANDO, "DAT válido a 9600 bps")
                 return True
+            if any(isinstance(m, Resposta) and m.tipo is TipoResposta.ERRO for m in mensagens):
+                self._inicio_confirmado = True
+                return False
             if any(protocolo.e_ack(m, "S", str(baud)) for m in mensagens):
+                self._inicio_confirmado = True
                 break
         self._mudar_estado(EstadoLink.NEGOCIANDO, f"Confirmando DAT em {baud} bps")
         if baud != 9600:
@@ -225,12 +265,16 @@ class SerialWorker(QThread):
                 if mensagem.comando is Comando.DAT:
                     self._tratar_telemetria(mensagem)
                     ultimo_dat = time.monotonic()
+                elif isinstance(mensagem, Resposta) and mensagem.tipo in (
+                        TipoResposta.RELE_LIGADO, TipoResposta.RELE_DESLIGADO):
+                    self._tratar_ack_rele(mensagem)
                 elif mensagem.comando is Comando.ERR:
                     self.aviso.emit("Erro informado pela placa: " + ", ".join(mensagem.campos))
             self._enviar_pendente()
             agora = time.monotonic()
-            if self._aguardando and agora - self._aguardando[1] > self.PRAZO_ATUACAO_S:
-                raise ErroLink("Atuação do relé sem confirmação por DAT; estado físico desconhecido.")
+            if self._contagem and agora - self._inicio_janela >= self.intervalo_ms / 1000:
+                self._publicar_janela()
+            self._verificar_prazo_rele()
             if agora - ultimo_dat > self.limite_silencio_s:
                 raise ErroLink(f"Placa sem resposta DAT há {agora - ultimo_dat:.1f} s.")
             mensagens = self._ler_mensagens()
@@ -239,14 +283,49 @@ class SerialWorker(QThread):
         with self._trava:
             destino = self._rele_pendente
             self._rele_pendente = None
-            if destino is True and self._botao is not False:
-                destino = False
-        if destino is None:
+            pedido = self._pedido_rele
+        if destino is None or pedido is None:
             return
-        if self._aguardando and self._aguardando[0] is destino:
-            return
+        self._publicar_janela()
         self._serial.write(protocolo.rele(destino))
-        self._aguardando = (destino, time.monotonic(), self._lote)
+        pedido.prazo = time.monotonic() + self.prazo_confirmacao_s
+        pedido.lote = self._lote
+        self._ignorar_amostras = 0
+
+    def _tratar_ack_rele(self, resposta: Resposta) -> None:
+        pedido = self._pedido_rele
+        if pedido is None or pedido.prazo is None:
+            return
+        ligado = resposta.tipo is TipoResposta.RELE_LIGADO
+        if ligado != pedido.destino.energizado:
+            logger.warning("ACK de RELE não corresponde ao comando pendente.")
+            return
+        pedido.ack = True
+        # O ISR pode ter capturado uma amostra antes do comando, transmitida
+        # depois do ACK. Ela não confirma nem contradiz essa atuação.
+        self._ignorar_amostras = 1
+
+    def _verificar_prazo_rele(self) -> None:
+        pedido = self._pedido_rele
+        if pedido is None or pedido.prazo is None or time.monotonic() < pedido.prazo:
+            return
+        reportado = pedido.reportado.name if pedido.reportado is not None else "DESCONHECIDO"
+        self._concluir_rele(
+            f"Tempo de confirmação esgotado para {pedido.destino.name}. "
+            f"Estado reportado após o envio: {reportado}.", pedido=pedido)
+
+    def _concluir_rele(self, erro: str = "", *, pedido=None) -> None:
+        with self._trava:
+            atual = self._pedido_rele
+            if atual is None or (pedido is not None and pedido is not atual):
+                return
+            self._pedido_rele = None
+            self._rele_pendente = None
+        if erro:
+            logger.warning("Comando RELE sem confirmação: %s", erro)
+            self.rele_falhou.emit(atual.destino, erro)
+        else:
+            self.rele_confirmado.emit(atual.destino)
 
     def _tratar_botao(self, pressionado: bool, agora: float) -> None:
         mudou = False
@@ -256,7 +335,6 @@ class SerialWorker(QThread):
                 if self._botao is not True:
                     self._geracao_protecao += 1
                     self._botao = True
-                    self._rele_pendente = False
                     mudou = True
             elif self._botao is None:
                 self._botao = False
@@ -271,27 +349,47 @@ class SerialWorker(QThread):
             # Pressão atua imediatamente; somente liberação exige 50 ms
             # estáveis. Bounce não rearma nem produz outra ocorrência.
             if pressionado:
-                self._enviar_pendente()  # independe de event loop e SQLite
+                # Uma solicitação por pressão debounced, inclusive carga já
+                # aberta ou religamento que ainda aguarda o commit na GUI.
+                self.enviar_rele(False)
+                self._enviar_pendente()
             self.botao_alterado.emit(pressionado)
+            if pressionado:
+                self.botao_acionado.emit()
 
     def _tratar_telemetria(self, mensagem: protocolo.Mensagem) -> None:
         tlm = protocolo.decodificar_telemetria(mensagem)
         self.pacotes_validos += 1
         agora = time.monotonic()
         self._tratar_botao(tlm.botao_pressionado, agora)
+        if self._ignorar_amostras:
+            self._ignorar_amostras -= 1
+            return
         estado = EstadoDisjuntor.FECHADO if tlm.disjuntor_fechado else EstadoDisjuntor.ABERTO
-        confirmou = (self._aguardando is not None and self._lote > self._aguardando[2]
-                     and tlm.disjuntor_fechado is self._aguardando[0])
-        if confirmou:
-            self._aguardando = None
+        anterior = self._disjuntor
+        pedido = self._pedido_rele
+        posterior = pedido is not None and pedido.prazo is not None and self._lote > pedido.lote
         if estado is not self._disjuntor:
-            self._publicar_janela()  # não mistura corrente de relé ligado/desligado
+            self._publicar_janela()
             self._disjuntor = estado
             self.disjuntor_reportado.emit(estado)
-        elif confirmou:
+        elif posterior:
             self.disjuntor_reportado.emit(estado)
-        if tlm.botao_pressionado and tlm.disjuntor_fechado and self._aguardando is None:
-            self.enviar_rele(False)  # fechamento externo enquanto botão está retido
+        if posterior:
+            pedido.reportado = estado
+            if agora >= pedido.prazo:
+                self._verificar_prazo_rele()
+            elif estado is pedido.destino:
+                self._concluir_rele(pedido=pedido)
+            elif pedido.ack:
+                self._concluir_rele(
+                    f"A placa aceitou {pedido.destino.name}, mas a telemetria "
+                    f"posterior reportou {estado.name}.", pedido=pedido)
+        if (tlm.botao_pressionado and estado is EstadoDisjuntor.FECHADO
+                and anterior is EstadoDisjuntor.ABERTO and self._pedido_rele is None):
+            # Nova transição para ligado durante a retenção exige corte.
+            # Estado continuamente divergente não gera retransmissão por DAT.
+            self.enviar_rele(False)
             self._enviar_pendente()
         if self._contagem == 0:
             self._inicio_janela = agora
@@ -306,6 +404,8 @@ class SerialWorker(QThread):
     def _publicar_janela(self) -> None:
         if not self._contagem:
             return
+        if self._disjuntor is not None:
+            self.disjuntor_reportado.emit(self._disjuntor)
         leitura = Leitura(datetime.now(), self._soma_v / self._contagem,
                           self._soma_i / self._contagem, self._picos)
         self._contagem = 0
@@ -349,7 +449,9 @@ class SerialWorker(QThread):
             if linha.startswith((b"=", b"PLACA EM ESPERA", b"Envie !")):
                 continue
             try:
-                mensagens.append(protocolo.interpretar(linha))
+                mensagem = protocolo.interpretar(linha)
+                if mensagem is not None:
+                    mensagens.append(mensagem)
             except ErroProtocolo as erro:
                 self._descartar(erro)
         if len(self._buffer) > protocolo.TAMANHO_MAXIMO:

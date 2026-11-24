@@ -84,7 +84,7 @@ class ServicoCorteEmergencial:
         """
         evento = Evento.agora(
             TipoEvento.ALERTA,
-            "Botão físico pressionado — solicitado !0; aguardando confirmação DAT",
+            "Botão de proteção acionado na placa (Botão físico pressionado) — solicitado !0; aguardando confirmação DAT",
             valor_medido,
         )
         self._repo_eventos.adicionar(evento, dispositivo_tag=self.TAG_DISJUNTOR)
@@ -97,7 +97,8 @@ class ServicoCorteEmergencial:
             for tag in (self.TAG_DISJUNTOR, self.TAG_RELE):
                 self._repo_dispositivos.atualizar_status(tag, estado.name, conn)
 
-    def registrar_disparo_espontaneo(self, valor_medido: str = "") -> Evento:
+    def registrar_disparo_espontaneo(self, valor_medido: str = "", *,
+                                    simulado: bool = False, inicial: bool = False) -> Evento:
         """Grava a abertura do disjuntor pelo hardware e o alerta correspondente.
 
         Diferente do corte, aqui o estado físico JÁ mudou: o serviço apenas
@@ -106,7 +107,9 @@ class ServicoCorteEmergencial:
         Levanta ``sqlite3.Error``/``LookupError`` se a gravação falhar.
         """
         evento = Evento.agora(
-            TipoEvento.ALERTA,
+            TipoEvento.STATUS if inicial else TipoEvento.ALERTA,
+            "Placa iniciou com o relé desligado — religamento exige ação manual" if inicial else
+            "Disparo simulado — intenção de abertura registrada sem confirmação serial" if simulado else
             "Disjuntor abriu espontaneamente — estado aberto confirmado em DAT",
             valor_medido,
         )
